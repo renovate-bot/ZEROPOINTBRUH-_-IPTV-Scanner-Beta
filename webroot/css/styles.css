@@ -424,8 +424,11 @@ body {
     position: relative;
     overflow: hidden;
     min-height: 120px;
-    display: flex;
-    flex-direction: column;
+    flex-shrink: 0;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 10px 12px;
+    align-items: center;
 }
 
 .channel-card:hover {
@@ -439,15 +442,42 @@ body {
     border-color: #ff6b35;
 }
 
-.channel-header {
+.channel-content {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    align-self: stretch;
+}
+
+.channel-row {
     display: flex;
     align-items: center;
-    gap: 12px;
-    margin-bottom: 10px;
+    gap: 8px;
+    min-width: 0;
     flex-shrink: 0;
 }
 
+.channel-row-top {
+    flex-wrap: wrap;
+}
+
+.channel-row-bottom {
+    flex-shrink: 0;
+    min-height: 1.25em;
+}
+
+.channel-row-end {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+    margin-left: auto;
+}
+
 .channel-logo {
+    grid-row: 1 / -1;
+    align-self: center;
     width: 40px;
     height: 40px;
     border-radius: 8px;
@@ -460,6 +490,7 @@ body {
     color: white;
     overflow: hidden;
     position: relative;
+    flex-shrink: 0;
 }
 
 .channel-logo img {
@@ -483,7 +514,7 @@ body {
 }
 
 .channel-name {
-    flex: 1;
+    flex: 1 1 auto;
     font-weight: 600;
     font-size: 16px;
     color: #fff;
@@ -510,23 +541,22 @@ body {
 }
 
 .channel-info {
+    flex: 1 1 auto;
     color: #ccc;
     font-size: 14px;
-    margin-bottom: 12px;
     line-height: 1.4;
-    flex: 1;
+    min-width: 0;
     overflow: hidden;
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    -webkit-box-orient: vertical;
-    line-clamp: 2;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .channel-meta {
+    flex-shrink: 0;
     color: #aeb5bf;
     font-size: 11px;
-    margin: 0 0 8px 0;
     opacity: 0.95;
+    white-space: nowrap;
 }
 
 .channel-actions {
@@ -1042,19 +1072,32 @@ iframe {
 }
 
 .channels-list-mobile .channel-card {
-    min-height: unset;
-    flex-direction: column;
+    min-height: 88px;
+    flex-shrink: 0;
     padding: 12px;
+    gap: 8px 10px;
 }
 
-.channels-list-mobile .channel-header {
-    margin-bottom: 8px;
+.channels-list-mobile .channel-row-top {
+    flex-wrap: wrap;
+    row-gap: 6px;
+}
+
+.channels-list-mobile .channel-row-end {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+.channels-list-mobile .channel-name {
+    min-width: 0;
+    flex: 1 1 120px;
 }
 
 .channels-list-mobile .channel-actions {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
+    display: flex !important;
+    flex-wrap: wrap;
     gap: 6px;
+    justify-content: flex-end;
 }
 
 .channels-list-mobile .channel-btn {
@@ -1084,15 +1127,7 @@ iframe {
     padding: 4px 10px;
     cursor: pointer;
     font-size: 14px;
-    margin-left: auto;
-}
-
-.channel-header {
-    position: relative;
-}
-
-.channel-header .btn-fav {
-    margin-left: auto;
+    flex-shrink: 0;
 }
 
 .channel-card.is-favorite {
@@ -1386,8 +1421,8 @@ body.dual-layout-root {
 
 .guide-epg-bar {
     display: grid;
-    grid-template-columns: minmax(120px, 22%) 1fr auto;
-    gap: 8px;
+    grid-template-columns: minmax(160px, 34%) 1fr min-content;
+    gap: 8px 12px;
     padding: 10px 16px;
     font-size: 11px;
     font-weight: 700;
@@ -1420,31 +1455,36 @@ body.dual-layout-root {
 .channel-rail-x1.channels-grid-desktop {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 10px;
     padding: 12px 14px 18px;
     overflow-y: auto;
+    flex: 1;
+    min-height: 0;
+    align-items: stretch;
     grid-template-columns: unset !important;
+}
+
+.channel-rail-x1 > .channel-card,
+.channel-rail-x1 > .group-header,
+.channel-rail-x1 > .no-channels {
+    flex-shrink: 0;
 }
 
 .channel-rail-x1 .channel-card {
     background: rgba(255, 255, 255, 0.04);
     border: 1px solid rgba(130, 160, 220, 0.1);
     border-radius: 12px !important;
-    min-height: auto !important;
+    min-height: 92px !important;
     padding: 12px 14px !important;
-    flex-direction: row !important;
-    flex-wrap: nowrap !important;
-    align-items: center !important;
-    gap: 10px;
-}
-
-.channel-rail-x1 .channel-header {
-    flex: 0 1 38%;
-    min-width: 0;
-    margin-bottom: 0 !important;
+    display: grid !important;
+    grid-template-columns: auto 1fr;
+    align-items: center;
+    gap: 10px 12px;
 }
 
 .channel-rail-x1 .channel-logo {
+    grid-row: 1 / -1;
+    align-self: center;
     width: 46px !important;
     height: 46px !important;
     border-radius: 10px !important;
@@ -1452,24 +1492,46 @@ body.dual-layout-root {
     background: linear-gradient(135deg, rgba(45, 157, 255, 0.35), rgba(124, 108, 255, 0.35)) !important;
 }
 
+.channel-rail-x1 .channel-content {
+    min-width: 0;
+    gap: 6px;
+    align-self: stretch;
+}
+
+.channel-rail-x1 .channel-row-top {
+    flex-wrap: nowrap;
+}
+
+.channel-rail-x1 .channel-name {
+    min-width: 0;
+    font-size: 15px;
+}
+
 .channel-rail-x1 .channel-info {
-    flex: 1 1 42%;
+    flex: 1 1 auto;
     min-width: 0;
     margin: 0 !important;
-    padding: 0 4px;
+    padding: 0;
     font-size: 13px !important;
-    -webkit-line-clamp: 2;
+    color: var(--carrier-muted, #ccc);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .channel-rail-x1 .channel-meta {
-    display: none !important;
+    display: block !important;
+    flex-shrink: 0;
+    font-size: 11px !important;
+    color: var(--carrier-muted, #aeb5bf);
+    opacity: 0.85;
 }
 
 .channel-rail-x1 .channel-actions {
-    flex: 0 0 auto;
-    flex-wrap: wrap;
+    display: flex !important;
+    flex: none;
+    flex-wrap: nowrap;
     justify-content: flex-end;
-    max-width: 44%;
     gap: 6px !important;
 }
 
@@ -1732,6 +1794,12 @@ body.dual-layout-root {
     padding-right: 0 !important;
 }
 
+.channels-list-mobile > .channel-card,
+.channels-list-mobile > .group-header,
+.channels-list-mobile > .no-channels {
+    flex-shrink: 0;
+}
+
 .mobile-panel-watch {
     justify-content: flex-start;
 }
@@ -1826,6 +1894,8 @@ body.dual-layout-root {
     background: rgba(255, 255, 255, 0.04);
     border: 1px solid rgba(130, 160, 220, 0.1);
     border-radius: 12px !important;
+    min-height: 88px !important;
+    flex-shrink: 0;
     padding: 10px 12px !important;
 }
 

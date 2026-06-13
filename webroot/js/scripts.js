@@ -1,6 +1,8 @@
 // IPTV Scanner — separate desktop / mobile layouts, smooth list updates, live revision stream
 
 const FAVORITES_STORAGE_KEY = 'iptv_scanner_favorites_v1';
+const RENDER_BATCH_SIZE = 40;
+const RENDER_SCROLL_THRESHOLD = 280;
 
 function streamUrlKey(url) {
     try {
@@ -30,6 +32,7 @@ class IPTVScanner {
         this.lastRevision = -1;
         this._reloadTimer = null;
         this._scrollAnchorKey = null;
+        this.renderedCount = 0;
         this._hlsInstance = null;
         this.favorites = this.loadFavorites();
         this.isGuideVisible = true;
@@ -60,10 +63,23 @@ class IPTVScanner {
             : document.getElementById('channelsListDesk');
     }
 
+    channelsScrollContainer(listEl) {
+        if (!listEl) {
+            return null;
+        }
+        if (listEl.id === 'channelsListMob') {
+            return listEl.closest('.mobile-list-scroller') || listEl;
+        }
+        return listEl;
+    }
+
     saveScrollAnchor() {
         const el = this.activeChannelsListEl();
-        if (!el) return;
-        const listTop = el.getBoundingClientRect().top;
+        const scroller = this.channelsScrollContainer(el);
+        if (!el || !scroller) {
+            return;
+        }
+        const listTop = scroller.getBoundingClientRect().top;
         this._scrollAnchorKey = null;
         for (const card of el.querySelectorAll('.channel-card[data-stream-key]')) {
             const r = card.getBoundingClientRect();
@@ -137,6 +153,9 @@ class IPTVScanner {
                 this.renderChannels({ preserveScroll: true });
             }, 250)
         );
+        this._onListScroll = this._onListScroll.bind(this);
+        document.getElementById('channelsListDesk')?.addEventListener('scroll', this._onListScroll, { passive: true });
+        document.querySelector('.mobile-list-scroller')?.addEventListener('scroll', this._onListScroll, { passive: true });
     }
 
     setupIntegrationUrls() {
@@ -504,6 +523,77 @@ class IPTVScanner {
         });
     }
 
+    computeInitialRenderCount(preserve) {
+        const total = this.filteredChannels.length;
+        if (!total) {
+            return 0;
+        }
+        if (!preserve) {
+            return Math.min(RENDER_BATCH_SIZE, total);
+        }
+
+        let target = this.renderedCount || RENDER_BATCH_SIZE;
+        if (this._scrollAnchorKey) {
+            const idx = this.filteredChannels.findIndex(
+                (ch) => streamUrlKey(ch.url) === this._scrollAnchorKey
+            );
+            if (idx >= 0) {
+                target = Math.max(target, idx + Math.ceil(RENDER_BATCH_SIZE / 2));
+            }
+        }
+        return Math.min(total, Math.max(RENDER_BATCH_SIZE, target));
+    }
+
+    appendChannelBatch(desk, mob, batchSize = RENDER_BATCH_SIZE) {
+        const start = this.renderedCount;
+        const end = Math.min(start + batchSize, this.filteredChannels.length);
+        if (start >= end) {
+            return false;
+        }
+
+        const fragD = document.createDocumentFragment();
+        const fragM = document.createDocumentFragment();
+        for (let i = start; i < end; i++) {
+            const ch = this.filteredChannels[i];
+            if (desk) {
+                fragD.appendChild(this.createChannelCard(ch));
+            }
+            if (mob) {
+                fragM.appendChild(this.createChannelCard(ch));
+            }
+        }
+        if (desk && fragD.childNodes.length) {
+            desk.appendChild(fragD);
+        }
+        if (mob && fragM.childNodes.length) {
+            mob.appendChild(fragM);
+        }
+        this.renderedCount = end;
+        return true;
+    }
+
+    _onListScroll(evt) {
+        const el = evt.target;
+        if (!el || this.renderedCount >= this.filteredChannels.length) {
+            return;
+        }
+        const isDesk = el.id === 'channelsListDesk';
+        const isMob = el.classList?.contains('mobile-list-scroller');
+        if (!isDesk && !isMob) {
+            return;
+        }
+        const nearBottom =
+            el.scrollTop + el.clientHeight >= el.scrollHeight - RENDER_SCROLL_THRESHOLD;
+        if (!nearBottom) {
+            return;
+        }
+        const desk = document.getElementById('channelsListDesk');
+        const mob = document.getElementById('channelsListMob');
+        if (this.appendChannelBatch(desk, mob)) {
+            this.updateVisibleCount();
+        }
+    }
+
     renderChannels(opts = {}) {
         const preserve = opts.preserveScroll !== false;
         if (preserve) {
@@ -513,10 +603,9 @@ class IPTVScanner {
         const desk = document.getElementById('channelsListDesk');
         const mob = document.getElementById('channelsListMob');
         [desk, mob].forEach((list) => {
-            if (!list) {
-                return;
+            if (list) {
+                list.innerHTML = '';
             }
-            list.innerHTML = '';
         });
 
         if (this.filteredChannels.length === 0) {
@@ -527,22 +616,13 @@ class IPTVScanner {
             if (mob) {
                 mob.innerHTML = empty;
             }
+            this.renderedCount = 0;
             this.updateVisibleCount();
             return;
         }
 
-        const fragD = document.createDocumentFragment();
-        const fragM = document.createDocumentFragment();
-        this.filteredChannels.forEach((ch) => {
-            fragD.appendChild(this.createChannelCard(ch));
-            fragM.appendChild(this.createChannelCard(ch));
-        });
-        if (desk) {
-            desk.appendChild(fragD);
-        }
-        if (mob) {
-            mob.appendChild(fragM);
-        }
+        this.renderedCount = 0;
+        this.appendChannelBatch(desk, mob, this.computeInitialRenderCount(preserve));
 
         this.updateVisibleCount();
         if (preserve) {
@@ -550,6 +630,12 @@ class IPTVScanner {
                 this.restoreScrollAnchor();
                 requestAnimationFrame(() => this.restoreScrollAnchor());
             });
+        } else if (desk) {
+            desk.scrollTop = 0;
+        }
+        const mobScroller = document.querySelector('.mobile-list-scroller');
+        if (!preserve && mobScroller) {
+            mobScroller.scrollTop = 0;
         }
     }
 
@@ -580,19 +666,25 @@ class IPTVScanner {
         const bwKbps = bandwidth > 0 ? `${Math.round(bandwidth / 1000)} kbps` : 'N/A';
 
         card.innerHTML = `
-            <div class="channel-header">
-                <div class="channel-logo">${logoHtml}</div>
-                <div class="channel-name">${name}</div>
-                <button type="button" class="btn-fav" aria-label="Favorite">${favLabel}</button>
-                <div class="channel-status ${escapeHtml(status)}"></div>
-            </div>
-            <div class="channel-meta">${quality} • ${language} • ${bwKbps}</div>
-            <div class="channel-info">${playingNow}</div>
-            <div class="channel-actions">
-                <button type="button" class="channel-btn primary ch-play" data-action="play"><i class="fas fa-play"></i> Play</button>
-                <button type="button" class="channel-btn ch-vlc" data-action="vlc"><i class="fas fa-external-link-alt"></i> VLC</button>
-                <button type="button" class="channel-btn ch-browser" data-action="browser"><i class="fas fa-globe"></i> Web</button>
-                <button type="button" class="channel-btn ch-copy" data-action="copy"><i class="fas fa-copy"></i> Copy</button>
+            <div class="channel-logo">${logoHtml}</div>
+            <div class="channel-content">
+                <div class="channel-row channel-row-top">
+                    <div class="channel-name">${name}</div>
+                    <div class="channel-row-end">
+                        <button type="button" class="btn-fav" aria-label="Favorite">${favLabel}</button>
+                        <div class="channel-status ${escapeHtml(status)}"></div>
+                        <div class="channel-actions">
+                            <button type="button" class="channel-btn primary ch-play" data-action="play"><i class="fas fa-play"></i> Play</button>
+                            <button type="button" class="channel-btn ch-vlc" data-action="vlc"><i class="fas fa-external-link-alt"></i> VLC</button>
+                            <button type="button" class="channel-btn ch-browser" data-action="browser"><i class="fas fa-globe"></i> Web</button>
+                            <button type="button" class="channel-btn ch-copy" data-action="copy"><i class="fas fa-copy"></i> Copy</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="channel-row channel-row-bottom">
+                    <div class="channel-info">${playingNow}</div>
+                    <div class="channel-meta">${quality} • ${language} • ${bwKbps}</div>
+                </div>
             </div>
         `;
 
@@ -620,7 +712,7 @@ class IPTVScanner {
             if (e.target.closest('button')) {
                 return;
             }
-            if (e.target === card || e.target.closest('.channel-header') || e.target.closest('.channel-info')) {
+            if (e.target === card || e.target.closest('.channel-content')) {
                 this.selectChannel(channel);
             }
         });
@@ -959,14 +1051,16 @@ class IPTVScanner {
     }
 
     updateVisibleCount() {
-        const v = this.filteredChannels.length;
+        const total = this.filteredChannels.length;
+        const shown = Math.min(this.renderedCount, total);
+        const label = shown < total ? `${shown} of ${total}` : String(total);
         const d = document.getElementById('visibleChannelsDesk');
         const m = document.getElementById('visibleChannelsMob');
         if (d) {
-            d.textContent = v;
+            d.textContent = label;
         }
         if (m) {
-            m.textContent = v;
+            m.textContent = label;
         }
     }
 
