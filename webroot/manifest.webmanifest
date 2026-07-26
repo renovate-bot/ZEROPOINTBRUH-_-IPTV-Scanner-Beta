@@ -1,0 +1,27 @@
+{
+  "name": "IPTV Scanner",
+  "short_name": "Live TV",
+  "description": "Live TV guide — browse and watch channels from around the world.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "theme_color": "#050812",
+  "background_color": "#050812",
+  "categories": ["entertainment", "video", "news"],
+  "lang": "en",
+  "icons": [
+    {
+      "src": "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'><rect width='512' height='512' rx='96' fill='%23050812'/><circle cx='256' cy='256' r='150' fill='none' stroke='%232d9dff' stroke-width='18'/><polygon points='214,180 214,332 340,256' fill='%232d9dff'/></svg>",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'><rect width='512' height='512' fill='%23050812'/><circle cx='256' cy='256' r='170' fill='%232d9dff'/><polygon points='214,180 214,332 340,256' fill='%23050812'/></svg>",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}

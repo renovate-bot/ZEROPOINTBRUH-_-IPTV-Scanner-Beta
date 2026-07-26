@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>{{ channel_name }} | Live stream | {{ site_name }}</title>
+    <meta name="description" content="{{ description }}">
+    <link rel="canonical" href="{{ canonical }}">
+    <meta name="robots" content="index,follow,max-image-preview:large">
+    <meta name="keywords" content="{{ channel_name }}, live TV, IPTV stream, {{ group_title }}, {{ country }}">
+    <meta property="og:type" content="video.other">
+    <meta property="og:title" content="{{ channel_name }} — Live | {{ site_name }}">
+    <meta property="og:description" content="{{ description }}">
+    <meta property="og:url" content="{{ canonical }}">
+    {% if og_image %}<meta property="og:image" content="{{ og_image }}">{% endif %}
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="{{ channel_name }}">
+    <meta name="twitter:description" content="{{ description }}">
+    {% if og_image %}<meta name="twitter:image" content="{{ og_image }}">{% endif %}
+    <meta name="theme-color" content="#050812">
+
+    <link rel="manifest" href="/manifest.webmanifest">
+    <link rel="alternate" type="application/rss+xml" title="{{ site_name }} (RSS)" href="{{ home_url }}/feed.xml">
+    <link rel="alternate" type="application/atom+xml" title="{{ site_name }} (Atom)" href="{{ home_url }}/atom.xml">
+    <script type="application/ld+json">{{ json_ld | safe }}</script>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Lexend:wght@500;600;700;800&display=swap" rel="stylesheet">
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['DM Sans', 'system-ui', 'sans-serif'],
+                        display: ['Lexend', 'system-ui', 'sans-serif'],
+                    },
+                    colors: {
+                        ink: {
+                            950: '#020409',
+                            900: '#050812',
+                            800: '#0a1020',
+                            700: '#111a30',
+                        },
+                        brand: {
+                            200: '#89c7ff',
+                            300: '#4fadff',
+                            400: '#2d9dff',
+                            500: '#1487ea',
+                        },
+                    },
+                    boxShadow: {
+                        glow: '0 0 0 1px rgba(45,157,255,.35), 0 8px 32px rgba(45,157,255,.18)',
+                    },
+                },
+            },
+        };
+    </script>
+</head>
+
+<body class="min-h-screen bg-ink-900 text-slate-100 font-sans antialiased">
+    <div class="mx-auto max-w-5xl px-4 sm:px-6 py-6 sm:py-10">
+
+        <!-- Breadcrumb -->
+        <nav class="text-xs text-slate-400 mb-4 flex items-center gap-2">
+            <a href="{{ home_url }}/" class="text-brand-300 hover:text-brand-200">← {{ site_name }}</a>
+            <span class="text-slate-600">·</span>
+            <span>Channel · {{ slug }}</span>
+        </nav>
+
+        <article>
+            <header class="mb-4 sm:mb-6">
+                <h1 class="font-display text-2xl sm:text-3xl font-semibold tracking-tight leading-tight">{{ channel_name }}</h1>
+                <p class="text-sm text-slate-400 mt-1">
+                    {% if group_title %}{{ group_title }}{% else %}Uncategorized{% endif %}{% if country %} · {{ country }}{% endif %} · Indexed stream page
+                </p>
+            </header>
+
+            <!-- Player -->
+            <div class="rounded-2xl border border-white/10 bg-black shadow-2xl overflow-hidden">
+                <div id="stage" class="relative aspect-video bg-black">
+                    {% if embed_player %}
+                    <iframe
+                        class="absolute inset-0 h-full w-full"
+                        src="{{ stream_url_encoded }}&autoplay=1"
+                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
+                        allowfullscreen loading="lazy" title="{{ channel_name }}"></iframe>
+                    {% else %}
+                    <video id="mainVideo" class="absolute inset-0 h-full w-full bg-black" controls playsinline autoplay muted></video>
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- CTAs -->
+            <div class="mt-4 flex flex-wrap items-center gap-2">
+                <a class="inline-flex items-center gap-1.5 rounded-full bg-brand-400 hover:bg-brand-300 text-ink-950 font-semibold text-sm px-4 py-2 shadow-glow"
+                   href="{{ home_url }}/">
+                    <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+                    Open full TV guide
+                </a>
+                <a class="inline-flex items-center gap-1.5 rounded-full bg-white/5 hover:bg-white/10 text-slate-200 text-sm px-4 py-2 ring-1 ring-white/10"
+                   href="{{ canonical }}">
+                    Permalink for this channel
+                </a>
+            </div>
+
+            <p class="mt-5 text-slate-300 leading-relaxed text-sm sm:text-base">{{ description }}</p>
+
+            <details class="mt-6 rounded-xl border border-white/10 bg-ink-800/60 p-3">
+                <summary class="cursor-pointer text-sm text-slate-300 font-medium">Technical / SEO notes</summary>
+                <div class="mt-2 text-sm text-slate-400 leading-relaxed">
+                    Crawlers discover this URL via
+                    <a href="{{ home_url }}/sitemap.xml" class="text-brand-300 hover:text-brand-200">sitemap.xml</a>
+                    and
+                    <a href="{{ home_url }}/feed.xml" class="text-brand-300 hover:text-brand-200">RSS</a>/<a href="{{ home_url }}/atom.xml" class="text-brand-300 hover:text-brand-200">Atom</a>.
+                    Playback uses same-origin relay where needed for HLS.
+                </div>
+            </details>
+        </article>
+
+        <div class="mt-8 text-center">
+            <a class="inline-flex items-center gap-1.5 rounded-full bg-white/5 hover:bg-white/10 text-slate-200 text-sm px-4 py-2 ring-1 ring-white/10"
+               href="{{ home_url }}/">
+                {{ site_name }} — full guide
+            </a>
+        </div>
+    </div>
+
+{% if not embed_player %}
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.5.15/hls.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script>
+(function () {
+    var playSrc = "{{ stream_url_encoded }}";
+    var video = document.getElementById("mainVideo");
+    if (!video) return;
+
+    {% if progressive %}
+    video.src = playSrc;
+    video.addEventListener("canplay", function () {
+        video.muted = false;
+        video.play().catch(function(){});
+    });
+    {% else %}
+    function goNative(src) {
+        video.src = src;
+        return true;
+    }
+    var mime = video.canPlayType("application/vnd.apple.mpegurl") || video.canPlayType("application/x-mpegURL");
+    if (typeof Hls !== "undefined" && Hls.isSupported()) {
+        var hls = new Hls({ enableWorker: true, lowLatencyMode: false, maxBufferLength: 30 });
+        hls.loadSource(playSrc);
+        hls.attachMedia(video);
+        hls.on(Hls.Events.ERROR, function (_, data) {
+            if (data && data.fatal && data.type === Hls.ErrorTypes.NETWORK_ERROR) hls.startLoad();
+            else if (data && data.fatal && data.type === Hls.ErrorTypes.MEDIA_ERROR) hls.recoverMediaError();
+        });
+    } else if (mime) {
+        goNative(playSrc);
+    } else {
+        goNative(playSrc);
+    }
+
+    video.addEventListener("canplay", function () {
+        video.muted = false;
+        video.play().catch(function(){});
+    });
+    {% endif %}
+})();
+    </script>
+{% endif %}
+</body>
+</html>
