@@ -1,239 +1,319 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="theme-color" content="#050812">
-    <meta name="description" content="Live IPTV channel guide — browse, search, and stream. Channel pages and sitemap for discovery.">
+
+    <!-- Homepage SEO -->
+    <title>Live TV Guide — Free IPTV Channels &amp; Streams</title>
+    <meta name="description" content="Free live TV guide: browse and watch thousands of IPTV channels — news, sports, movies and music — right from your browser.">
+    <link rel="canonical" href="/">
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="Live TV Guide — Free IPTV Channels &amp; Streams">
+    <meta property="og:description" content="Browse and watch live IPTV channels from around the world.">
+    <meta property="og:url" content="/">
+    <meta property="og:image" content="">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Live TV Guide">
+    <meta name="twitter:description" content="Browse and watch live IPTV channels from around the world.">
+
+    <!-- PWA -->
+    <link rel="manifest" href="/manifest.webmanifest">
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='12' fill='%23050812'/><circle cx='32' cy='32' r='20' fill='none' stroke='%232d9dff' stroke-width='3'/><polygon points='27,22 27,42 44,32' fill='%232d9dff'/></svg>">
+
+    <!-- Feeds -->
     <link rel="alternate" type="application/rss+xml" title="IPTV Scanner — channel feed" href="/feed.xml">
     <link rel="alternate" type="application/atom+xml" title="IPTV Scanner — channel feed" href="/atom.xml">
-    <title>IPTV Scanner - Modern TV Guide</title>
+
+    <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=Lexend:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Lexend:wght@500;600;700;800&display=swap" rel="stylesheet">
+
+    <!-- Tailwind (CDN, Phase 3) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['DM Sans', 'system-ui', 'sans-serif'],
+                        display: ['Lexend', 'system-ui', 'sans-serif'],
+                    },
+                    colors: {
+                        ink: {
+                            950: '#020409',
+                            900: '#050812',
+                            800: '#0a1020',
+                            700: '#111a30',
+                            600: '#1a2540',
+                        },
+                        brand: {
+                            50: '#e6f3ff',
+                            100: '#bfe0ff',
+                            200: '#89c7ff',
+                            300: '#4fadff',
+                            400: '#2d9dff',
+                            500: '#1487ea',
+                            600: '#0a6ecb',
+                            700: '#0855a1',
+                        },
+                    },
+                    boxShadow: {
+                        glow: '0 0 0 1px rgba(45,157,255,.35), 0 8px 32px rgba(45,157,255,.18)',
+                    },
+                },
+            },
+        };
+    </script>
+
+    <!-- Minimal shell styles (Tailwind owns layout; this is only for a11y + native controls) -->
     <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css">
-    <link rel="icon" type="image/x-icon" href="data:image/x-icon;base64,AAABAAEAEBAAAAEAIAAoBQAog==">
 </head>
-<body class="dual-layout-root">
-    <!-- Desktop layout (767px+) -->
-    <div class="layout-desktop" id="layoutDesktop">
-        <div class="tv-container tv-container-x1">
-            <header class="tv-header carrier-header">
-                <div class="header-left">
-                    <div class="brand-lockup">
-                        <span class="brand-mark" aria-hidden="true"><i class="fas fa-circle-play"></i></span>
-                        <div class="brand-text">
-                            <h1>Live TV Guide</h1>
-                            <p class="brand-tagline">All channels — one screen</p>
+
+<body class="min-h-screen bg-ink-900 text-slate-100 font-sans antialiased selection:bg-brand-400/40">
+
+    <!-- Sticky header -->
+    <header class="sticky top-0 z-40 border-b border-white/5 bg-ink-900/85 backdrop-blur supports-[backdrop-filter]:bg-ink-900/70">
+        <div class="mx-auto max-w-7xl px-3 sm:px-5">
+            <div class="flex items-center gap-3 py-3 sm:py-4">
+                <!-- Brand -->
+                <a href="/" class="flex items-center gap-2 shrink-0">
+                    <span class="grid h-9 w-9 place-items-center rounded-xl bg-brand-400/15 ring-1 ring-brand-400/30 text-brand-300">
+                        <svg viewBox="0 0 24 24" class="h-5 w-5" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
+                    </span>
+                    <span class="hidden sm:flex flex-col leading-tight">
+                        <span class="font-display text-base sm:text-lg font-semibold tracking-tight">Live TV Guide</span>
+                        <span class="text-[11px] text-slate-400">All your channels — one screen</span>
+                    </span>
+                    <span class="sm:hidden font-display text-base font-semibold tracking-tight">Live TV</span>
+                </a>
+
+                <!-- Search (primary CTA for beginners) -->
+                <label class="relative flex-1 min-w-0 max-w-2xl mx-auto sm:mx-2">
+                    <span class="sr-only">Search channels</span>
+                    <svg class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+                    <input
+                        id="searchInput"
+                        type="search"
+                        inputmode="search"
+                        autocomplete="off"
+                        placeholder="Search channels…"
+                        class="w-full h-10 sm:h-11 rounded-full bg-ink-800/80 pl-9 pr-4 text-sm text-slate-100 placeholder:text-slate-500 border border-white/10 focus:border-brand-400/60 focus:outline-none focus:ring-2 focus:ring-brand-400/25 transition"
+                    >
+                </label>
+
+                <!-- Status pills (desktop only) -->
+                <div class="hidden md:flex items-center gap-2 shrink-0 text-xs text-slate-300">
+                    <span class="inline-flex items-center gap-1.5 rounded-full bg-white/5 px-2.5 py-1 ring-1 ring-white/10">
+                        <span class="h-1.5 w-1.5 rounded-full bg-brand-400"></span>
+                        <span id="channelCount">0</span> channels
+                    </span>
+                    <span class="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/10 text-emerald-300 px-2.5 py-1 ring-1 ring-emerald-500/20">
+                        <span class="h-1.5 w-1.5 rounded-full bg-emerald-400" id="onlineDot"></span>
+                        <span id="onlineCount">0</span> live
+                    </span>
+                    <span id="scanStatus" class="inline-flex items-center gap-1.5 rounded-full bg-brand-500/10 text-brand-200 px-2.5 py-1 ring-1 ring-brand-500/20">Ready</span>
+                </div>
+            </div>
+
+            <!-- Mode tabs -->
+            <nav class="flex items-center gap-1 pb-3" role="tablist" aria-label="Content mode">
+                <button type="button" role="tab" aria-selected="true" data-mode="live"
+                        class="mode-tab inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-sm font-medium bg-brand-400 text-ink-950 ring-1 ring-brand-300 shadow-glow">
+                    <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="currentColor"><circle cx="12" cy="12" r="6"/></svg>
+                    Live
+                </button>
+                <button type="button" role="tab" aria-selected="false" data-mode="videos"
+                        class="mode-tab inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-sm font-medium text-slate-300 hover:bg-white/5 ring-1 ring-transparent">
+                    <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+                    Videos
+                </button>
+                <button type="button" role="tab" aria-selected="false" data-mode="favorites"
+                        class="mode-tab inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-sm font-medium text-slate-300 hover:bg-white/5 ring-1 ring-transparent">
+                    <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="currentColor"><path d="M12 17.3 6.2 21l1.5-6.6L2.5 9.9l6.7-.6L12 3l2.8 6.3 6.7.6-5.2 4.5L17.8 21z"/></svg>
+                    My list
+                </button>
+
+                <!-- More disclosure -->
+                <details class="ml-auto relative">
+                    <summary class="list-none cursor-pointer inline-flex items-center gap-1 rounded-full px-3 py-1.5 text-sm text-slate-300 hover:bg-white/5 ring-1 ring-white/10">
+                        More
+                        <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
+                    </summary>
+                    <div class="absolute right-0 mt-2 w-72 rounded-2xl border border-white/10 bg-ink-800/95 backdrop-blur p-3 shadow-2xl z-50 space-y-3">
+                        <label class="flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-white/5 text-sm">
+                            <input id="testToggle" type="checkbox" class="h-4 w-4 accent-brand-400">
+                            <span>Include test / beta channels</span>
+                        </label>
+                        <label class="flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-white/5 text-sm">
+                            <input id="pendingToggle" type="checkbox" class="h-4 w-4 accent-brand-400">
+                            <span>Show pending (unchecked) streams</span>
+                        </label>
+                        <div class="h-px bg-white/10 my-1"></div>
+                        <div class="text-xs text-slate-400 space-y-1.5">
+                            <div class="font-semibold text-slate-300">Jellyfin / VLC M3U</div>
+                            <code id="jellyfinM3u" class="block truncate rounded bg-ink-900 px-2 py-1 text-[11px] text-slate-300">—</code>
+                            <button type="button" id="copyM3uBtn"
+                                    class="inline-flex items-center gap-1.5 rounded-md bg-brand-400/15 hover:bg-brand-400/25 text-brand-200 px-2.5 py-1 text-xs font-medium ring-1 ring-brand-400/30">
+                                Copy playlist link
+                            </button>
+                            <div>Add as a Jellyfin Live TV M3U tuner.</div>
                         </div>
                     </div>
-                    <div class="status-indicator status-pills">
-                        <span class="pill pill-stat"><span id="channelCountDesk">0</span> channels</span>
-                        <span class="pill pill-live"><span class="status-dot online" id="onlineDotDesk"></span><span id="onlineCountDesk">0</span> online</span>
-                        <span id="scanStatusDesk" class="pill pill-scan scanning">Updating…</span>
-                    </div>
-                </div>
-                <div class="header-right header-tools">
-                    <label class="filter-check chk-glass"><input type="checkbox" id="onlineOnlyDesk"> Live only</label>
-                    <label class="filter-check chk-glass"><input type="checkbox" id="favoritesOnlyDesk"> My list</label>
-                    <div class="search-box search-carrier">
-                        <input type="text" id="searchDesk" placeholder="Search channels, networks, topics…" autocomplete="off">
-                        <i class="fas fa-search"></i>
-                    </div>
-                    <button type="button" id="toggleGuideDesk" class="toggle-btn btn-guide-toggle">
-                        <i class="fas fa-th-list"></i> Guide
-                    </button>
-                </div>
-            </header>
+                </details>
+            </nav>
+        </div>
+    </header>
 
-            <details class="integrations-strip" id="integrationsDesk">
-                <summary>This site on your TV browser &middot; Jellyfin playlist</summary>
-                <div class="integrations-body">
-                    <p><strong>TV / phone browser:</strong> open exactly <span class="integrations-host" id="bareOriginDesk">—</span> (homepage = this guide). Playback uses our built-in relay.</p>
-                    <p><strong>Jellyfin Live TV tuner (M3U):</strong> <code id="jellyfinM3uDesk" class="integrations-code">—</code>
-                        <button type="button" class="integrations-copy-btn" id="copyM3uDesk" title="Copy">Copy</button>
-                        <span class="integrations-hint">Paste in Dashboard → Live TV → M3U on your Jellyfin server (not on the TV).</span>
-                    </p>
-                </div>
-            </details>
+    <!-- Main content -->
+    <main class="mx-auto max-w-7xl px-3 sm:px-5 pb-24 lg:pb-8">
+        <div class="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_420px] gap-4 lg:gap-6 mt-4">
 
-            <main class="tv-main tv-main-x1">
-                <section class="player-section x1-hero">
-                    <div class="x1-screen-wrap">
-                        <div class="x1-bezel">
-                            <div id="videoPlayerDesk" class="video-player video-player-x1">
-                                <div class="player-placeholder">
-                                    <i class="fas fa-play-circle"></i>
-                                    <p>Select a channel to start watching</p>
+            <!-- Player -->
+            <section aria-label="Player" class="lg:sticky lg:top-32 self-start">
+                <div class="rounded-2xl overflow-hidden border border-white/10 bg-black shadow-2xl">
+                    <div id="videoPlayer" class="relative aspect-video bg-black">
+                        <div id="playerPlaceholder" class="absolute inset-0 grid place-items-center text-center p-6">
+                            <div class="max-w-xs">
+                                <div class="mx-auto grid h-16 w-16 place-items-center rounded-full bg-brand-400/15 ring-1 ring-brand-400/30 text-brand-300 mb-3">
+                                    <svg viewBox="0 0 24 24" class="h-8 w-8" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
                                 </div>
+                                <p class="font-display text-lg font-semibold text-slate-100">Pick a channel to start watching</p>
+                                <p class="text-sm text-slate-400 mt-1">Tap <span class="text-brand-300 font-semibold">Play</span> on any channel below.</p>
                             </div>
                         </div>
                     </div>
-                    <div class="player-info player-info-x1">
-                        <div class="now-playing-label">Now playing</div>
-                        <h2 id="currentChannelNameDesk">No channel selected</h2>
-                        <p id="currentChannelInfoDesk">Choose a channel from the guide on the right to begin streaming.</p>
-                        <div id="loadingIndicatorDesk" class="loading loading-x1">
-                            <i class="fas fa-spinner fa-spin"></i>
-                            <p>Loading channels…</p>
+                </div>
+
+                <!-- Now playing meta -->
+                <div class="mt-3 flex items-start gap-3">
+                    <div class="flex-1 min-w-0">
+                        <div class="text-[11px] uppercase tracking-widest text-brand-300/80 font-semibold">Now playing</div>
+                        <h2 id="currentChannelName" class="font-display text-lg sm:text-xl font-semibold truncate">No channel selected</h2>
+                        <p id="currentChannelInfo" class="text-sm text-slate-400 truncate">Browse below and tap Play on any channel.</p>
+                    </div>
+
+                    <!-- Quality selector -->
+                    <label class="shrink-0">
+                        <span class="sr-only">Video quality</span>
+                        <select id="qualitySelect"
+                                class="rounded-lg bg-ink-800 border border-white/10 text-xs text-slate-200 px-2 py-1.5 focus:border-brand-400/60 focus:outline-none focus:ring-2 focus:ring-brand-400/25 disabled:opacity-50"
+                                disabled>
+                            <option value="-1">Auto quality</option>
+                        </select>
+                    </label>
+                </div>
+            </section>
+
+            <!-- Channel list panel -->
+            <section aria-label="Channels" class="min-w-0">
+                <!-- Filters -->
+                <div class="rounded-2xl border border-white/10 bg-ink-800/60 p-3 sm:p-4">
+                    <div class="flex items-center justify-between gap-2 mb-2.5">
+                        <h3 class="font-display font-semibold text-slate-100">Channels</h3>
+                        <div class="text-xs text-slate-400">
+                            <span id="visibleCount">0</span> shown
                         </div>
                     </div>
-                </section>
 
-                <section id="channelGuideDesk" class="guide-section guide-x1">
-                    <div class="guide-epg-bar">
-                        <span class="epg-col epg-ch">Channel</span>
-                        <span class="epg-col epg-now">Lineup</span>
-                        <span class="epg-col epg-act">Watch</span>
+                    <div class="grid grid-cols-2 gap-2">
+                        <label class="min-w-0">
+                            <span class="sr-only">Group</span>
+                            <select id="groupFilter"
+                                    class="w-full rounded-lg bg-ink-900 border border-white/10 text-sm text-slate-200 px-2.5 py-2 focus:border-brand-400/60 focus:outline-none focus:ring-2 focus:ring-brand-400/25">
+                                <option value="">All groups</option>
+                            </select>
+                        </label>
+                        <label class="min-w-0">
+                            <span class="sr-only">Country</span>
+                            <select id="countryFilter"
+                                    class="w-full rounded-lg bg-ink-900 border border-white/10 text-sm text-slate-200 px-2.5 py-2 focus:border-brand-400/60 focus:outline-none focus:ring-2 focus:ring-brand-400/25">
+                                <option value="">All countries</option>
+                            </select>
+                        </label>
                     </div>
-                    <div class="guide-header guide-header-x1">
-                        <div class="guide-controls">
-                            <select id="groupFilterDesk"><option value="">All groups</option></select>
-                            <select id="countryFilterDesk"><option value="">All countries</option></select>
-                            <select id="sortFilterDesk">
+
+                    <!-- Advanced sort (progressive disclosure) -->
+                    <details class="mt-2 group">
+                        <summary class="list-none cursor-pointer inline-flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200">
+                            <svg viewBox="0 0 24 24" class="h-3 w-3 transition-transform group-open:rotate-180" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
+                            Advanced sort
+                        </summary>
+                        <div class="mt-2 grid grid-cols-2 gap-2">
+                            <select id="sortFilter" class="w-full rounded-lg bg-ink-900 border border-white/10 text-sm text-slate-200 px-2.5 py-2">
                                 <option value="name">Sort by name</option>
                                 <option value="group_title">Sort by group</option>
                                 <option value="country">Sort by country</option>
                                 <option value="status">Sort by status</option>
-                                <option value="audio_language">Sort by language</option>
                                 <option value="variant_quality">Sort by quality</option>
                                 <option value="variant_bandwidth">Sort by bandwidth</option>
                             </select>
-                            <select id="sortDirDesk">
-                                <option value="asc">Asc</option>
-                                <option value="desc">Desc</option>
+                            <select id="sortDir" class="w-full rounded-lg bg-ink-900 border border-white/10 text-sm text-slate-200 px-2.5 py-2">
+                                <option value="asc">Ascending</option>
+                                <option value="desc">Descending</option>
                             </select>
                         </div>
-                        <div class="guide-stats guide-stats-x1"><span id="visibleChannelsDesk">0</span> in view</div>
+                    </details>
+                </div>
+
+                <!-- List container -->
+                <div id="channelsList"
+                     class="mt-3 space-y-2 lg:max-h-[calc(100vh-24rem)] lg:overflow-y-auto lg:pr-1"
+                     aria-busy="true">
+                    <!-- Loading placeholder -->
+                    <div id="loadingIndicator" class="rounded-xl border border-white/10 bg-ink-800/60 p-6 text-center">
+                        <div class="animate-pulse text-slate-400 text-sm">Loading channels…</div>
                     </div>
-                    <div id="channelsListDesk" class="channels-grid channels-grid-desktop channel-rail-x1"></div>
-                </section>
-            </main>
+                </div>
+
+                <!-- Empty state (hidden by default) -->
+                <div id="emptyState" class="hidden mt-3 rounded-xl border border-white/10 bg-ink-800/60 p-6 text-center">
+                    <div class="mx-auto grid h-12 w-12 place-items-center rounded-full bg-white/5 mb-3">
+                        <svg viewBox="0 0 24 24" class="h-6 w-6 text-slate-400" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+                    </div>
+                    <p class="font-medium text-slate-200">No channels match your filters</p>
+                    <p class="text-sm text-slate-400 mt-1">Try clearing search or switching mode.</p>
+                    <button type="button" id="clearFiltersBtn"
+                            class="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-brand-400/15 hover:bg-brand-400/25 text-brand-200 px-3 py-1.5 text-sm font-medium ring-1 ring-brand-400/30">
+                        Clear filters
+                    </button>
+                </div>
+            </section>
+        </div>
+    </main>
+
+    <!-- Mobile status bar (fixed, only on small screens) -->
+    <div class="lg:hidden fixed bottom-0 inset-x-0 z-30 border-t border-white/10 bg-ink-900/95 backdrop-blur">
+        <div class="mx-auto max-w-7xl px-3 py-2 flex items-center justify-between text-[11px] text-slate-300">
+            <span class="inline-flex items-center gap-1.5">
+                <span class="h-1.5 w-1.5 rounded-full bg-brand-400"></span>
+                <span id="channelCountMob">0</span> ch
+            </span>
+            <span class="inline-flex items-center gap-1.5">
+                <span class="h-1.5 w-1.5 rounded-full bg-emerald-400" id="onlineDotMob"></span>
+                <span id="onlineCountMob">0</span> live
+            </span>
+            <span id="scanStatusMob" class="text-brand-300">Ready</span>
         </div>
     </div>
 
-    <!-- Mobile layout (<768px): fixed app shell — no page scroll; list scrolls inside -->
-    <div class="layout-mobile" id="layoutMobile">
-        <div class="mobile-shell mobile-app-shell">
-            <header class="mobile-top mobile-app-top">
-                <div class="mobile-brand-row">
-                    <div class="mobile-brand">
-                        <span class="brand-mark-mobile"><i class="fas fa-circle-play"></i></span>
-                        <div>
-                            <h1 class="mobile-title">Live TV</h1>
-                            <p class="mobile-sub">IPTV Scanner</p>
-                        </div>
-                    </div>
-                    <span class="mobile-live-badge">● LIVE</span>
-                </div>
-                <div class="mobile-metrics">
-                    <span><strong id="channelCountMob">0</strong> channels</span>
-                    <span class="metric-dot-wrap"><span class="status-dot online" id="onlineDotMob"></span><strong id="onlineCountMob">0</strong> on</span>
-                    <span id="scanStatusMob" class="scanning scan-mini">Updating…</span>
-                </div>
-                <details class="integrations-strip integrations-strip-mobile" id="integrationsMob">
-                    <summary>TV URL &middot; Jellyfin M3U</summary>
-                    <div class="integrations-body">
-                        <p><strong>Browser:</strong> <span class="integrations-host" id="bareOriginMob">—</span></p>
-                        <p><strong>Jellyfin M3U:</strong> <code id="jellyfinM3uMob" class="integrations-code">—</code>
-                            <button type="button" class="integrations-copy-btn" id="copyM3uMob" title="Copy">Copy</button>
-                        </p>
-                    </div>
-                </details>
-            </header>
+    <!-- Notification host -->
+    <div id="notifyHost" class="fixed z-50 top-2 right-2 sm:top-4 sm:right-4 space-y-2 pointer-events-none"></div>
 
-            <div class="mobile-stage">
-            <div class="mobile-panel mobile-panel-browse" data-panel="browse">
-                <div class="mobile-toolbar">
-                    <div class="search-box mobile-search search-app">
-                        <input type="text" id="searchMob" placeholder="Search networks…" autocomplete="off">
-                        <i class="fas fa-search"></i>
-                    </div>
-                    <div class="mobile-chip-row">
-                    <label class="chip-toggle"><input type="checkbox" id="onlineOnlyMob"> <span>Live</span></label>
-                    <label class="chip-toggle"><input type="checkbox" id="favoritesOnlyMob"> <span>★ Saves</span></label>
-                    </div>
-                </div>
-                <div class="mobile-selects mobile-selects-app">
-                    <select id="groupFilterMob"><option value="">Group</option></select>
-                    <select id="countryFilterMob"><option value="">Region</option></select>
-                    <select id="sortFilterMob">
-                        <option value="name">Name</option>
-                        <option value="group_title">Group</option>
-                        <option value="country">Country</option>
-                        <option value="status">Status</option>
-                        <option value="audio_language">Lang</option>
-                        <option value="variant_quality">Quality</option>
-                        <option value="variant_bandwidth">Bandwidth</option>
-                    </select>
-                    <select id="sortDirMob">
-                        <option value="asc">↑</option>
-                        <option value="desc">↓</option>
-                    </select>
-                </div>
-                <div class="mobile-list-meta mobile-list-meta-app"><span id="visibleChannelsMob">0</span> showing</div>
-                <div class="mobile-list-scroller">
-                    <div id="channelsListMob" class="channels-list-mobile"></div>
-                </div>
-            </div>
-
-            <div class="mobile-panel mobile-panel-watch hidden" data-panel="watch">
-                <div class="mobile-watch-frame">
-                    <div id="videoPlayerMob" class="video-player video-player-mobile video-player-app">
-                        <div class="player-placeholder">
-                            <i class="fas fa-play-circle"></i>
-                            <p>Browse channels, then tap Play</p>
-                        </div>
-                    </div>
-                </div>
-                <div class="player-info player-info-mobile player-info-app">
-                    <h2 id="currentChannelNameMob">No channel</h2>
-                    <p id="currentChannelInfoMob">Open Guide and tap a channel to watch.</p>
-                    <div id="loadingIndicatorMob" class="loading hidden">
-                        <i class="fas fa-spinner fa-spin"></i>
-                        <p>Loading…</p>
-                    </div>
-                </div>
-            </div>
-            </div>
-
-            <nav class="mobile-tabbar" role="tablist" aria-label="Main">
-                <button type="button" class="mobile-tab active" data-mobile-tab="browse" role="tab" aria-selected="true">
-                    <i class="fas fa-layer-group"></i><span>Guide</span>
-                </button>
-                <button type="button" class="mobile-tab" data-mobile-tab="watch" role="tab" aria-selected="false">
-                    <i class="fas fa-tv"></i><span>Watch</span>
-                </button>
-            </nav>
-        </div>
-    </div>
-
-    <div id="previewModal" class="modal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h3 id="previewChannelName">Channel Preview</h3>
-                <button type="button" class="close-btn" id="closePreviewX">&times;</button>
-            </div>
-            <div class="modal-body">
-                <div id="previewPlayer" class="preview-player">
-                    <div class="preview-placeholder">
-                        <i class="fas fa-play-circle"></i>
-                        <p>Loading preview…</p>
-                    </div>
-                </div>
-                <div class="preview-info">
-                    <p id="previewChannelInfo"></p>
-                    <div class="preview-actions">
-                        <button type="button" id="watchNowBtn" class="primary-btn">Watch Now</button>
-                        <button type="button" id="closePreviewBtn" class="secondary-btn">Close</button>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-
+    <!-- Scripts -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.5.15/hls.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
     <script src="{{ url_for('static', filename='js/scripts.js') }}"></script>
+
+    <!-- SW registration -->
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/sw.js').catch(() => {});
+            });
+        }
+    </script>
 </body>
 </html>
