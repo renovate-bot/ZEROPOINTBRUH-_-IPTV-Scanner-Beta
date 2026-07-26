@@ -7,8 +7,10 @@ app, start the embedded FastWorker-compatible task queue, and serve HTTP.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import logging
 import os
+import signal
 from threading import Thread
 
 from app_factory import create_app
@@ -22,6 +24,13 @@ logging.basicConfig(
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
 )
 log = logging.getLogger("main")
+
+# Dedicated pool for asyncio.to_thread / run_in_executor so we can shut it
+# down with wait=False on Ctrl+C (avoids the hanging atexit ThreadPool join).
+_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+    max_workers=8,
+    thread_name_prefix="iptv-pool",
+)
 
 
 def _ensure_directories():
@@ -50,7 +59,6 @@ async def _async_main():
         public_base=IPTV_PUBLIC_BASE_URL or None,
         worker_count=4,
     )
-    # Kick an immediate ingest so a fresh DB fills quickly.
     try:
         await client.delay("ingest_sources")
     except Exception:
@@ -58,22 +66,72 @@ async def _async_main():
     return client
 
 
+def _shutdown(loop: asyncio.AbstractEventLoop, client) -> None:
+    log.info("Shutting own :3 XD, bye bye") # just a joke, don't take it seriously :3 XD
+    if client is not None:
+        try:
+            loop.run_until_complete(asyncio.wait_for(client.stop(), timeout=2.5))
+        except Exception:
+            pass
+    try:
+        pending = [t for t in asyncio.all_tasks(loop) if not t.done()]
+        for t in pending:
+            t.cancel()
+        if pending:
+            loop.run_until_complete(
+                asyncio.wait_for(
+                    asyncio.gather(*pending, return_exceptions=True),
+                    timeout=1.0,
+                )
+            )
+    except Exception:
+        pass
+    try:
+        _EXECUTOR.shutdown(wait=False, cancel_futures=True)
+    except TypeError:
+        try:
+            _EXECUTOR.shutdown(wait=False)
+        except Exception:
+            pass
+    except Exception:
+        pass
+    try:
+        loop.close()
+    except Exception:
+        pass
+    # Hard-exit so blocked network threads cannot hang interpreter atexit
+    # (the classic Ctrl+C "Exception ignored in threading" join).
+    os._exit(0)
+
+
 if __name__ == "__main__":
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
+    loop.set_default_executor(_EXECUTOR)
 
     flask_thread = Thread(target=run_flask, daemon=True)
     flask_thread.start()
 
-    client = loop.run_until_complete(_async_main())
+    client = None
+    stop_state = {"requested": False}
+
+    def _request_stop(*_args):
+        if stop_state["requested"]:
+            os._exit(0)
+        stop_state["requested"] = True
+        loop.call_soon_threadsafe(loop.stop)
 
     try:
+        signal.signal(signal.SIGINT, _request_stop)
+        if hasattr(signal, "SIGTERM"):
+            signal.signal(signal.SIGTERM, _request_stop)
+    except Exception:
+        pass
+
+    try:
+        client = loop.run_until_complete(_async_main())
         loop.run_forever()
     except KeyboardInterrupt:
-        log.info("shutting down")
+        pass
     finally:
-        try:
-            loop.run_until_complete(client.stop())
-        except Exception:
-            pass
-        loop.close()
+        _shutdown(loop, client)

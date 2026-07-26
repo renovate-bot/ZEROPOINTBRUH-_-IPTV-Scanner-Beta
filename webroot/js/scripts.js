@@ -67,6 +67,10 @@
 
             this._boundOnListScroll = this._onListScroll.bind(this);
             this._boundOnWindowScroll = this._onWindowScroll.bind(this);
+            this._channelMenu = null;
+            this._channelMenuChannel = null;
+            this._channelMenuTrigger = null;
+            this._boundCloseChannelMenu = this._closeChannelMenu.bind(this);
         }
 
         // ------------------------- init -----------------------------------
@@ -77,6 +81,7 @@
             this._setupFilters();
             this._setupMoreToggles();
             this._setupPlayerControls();
+            this._setupChannelMenu();
             this._setupInfiniteScroll();
             this._setupEmptyState();
             this._connectEventStream();
@@ -117,10 +122,12 @@
             }
             this._persistFavorites();
 
-            // Update cards in place
-            document
-                .querySelectorAll(`[data-channel-url="${CSS.escape(url)}"] .fav-btn`)
-                .forEach((btn) => this._syncFavButton(btn, url));
+            // Update cards in place (fav lives in the floating menu now;
+            // if open for this url, refresh its label too).
+            if (this._channelMenu && !this._channelMenu.hidden && this._channelMenuChannel?.url === url) {
+                const favBtn = this._channelMenu.querySelector('[data-action="fav"]');
+                if (favBtn) this._syncFavButton(favBtn, url);
+            }
 
             if (this.mode === 'favorites') {
                 this.reload({ resetScroll: false });
@@ -347,12 +354,15 @@
             if (!video) return;
             video.removeAttribute('src');
             video.querySelectorAll('source').forEach((s) => s.remove());
+            this._setAudioOnlyUi(false);
 
             const path = (originalUrl || '').split(/[?#]/)[0].toLowerCase();
-            const progressive = /\.(mp4|webm|ogv)$/i.test(path);
+            const progressive = /\.(mp4|webm|ogv|mp3|aac|m4a|ogg|wav)$/i.test(path);
+            const audioFile = /\.(mp3|aac|m4a|ogg|wav)$/i.test(path);
 
             if (progressive) {
                 video.src = playUrl;
+                if (audioFile) this._setAudioOnlyUi(true);
                 return;
             }
 
@@ -363,6 +373,15 @@
                     lowLatencyMode: false,
                     maxBufferLength: 30,
                     backBufferLength: 30,
+                    // Keep playlist/segment requests on our same-origin proxy;
+                    // do not let the browser hit raw http:// upstreams.
+                    xhrSetup: (xhr) => {
+                        try {
+                            xhr.withCredentials = false;
+                        } catch {
+                            /* ignore */
+                        }
+                    },
                 });
                 this.hls = hls;
                 hls.loadSource(playUrl);
@@ -370,6 +389,9 @@
                 hls.on(Hls.Events.MANIFEST_PARSED, (_, data) => {
                     if (data?.levels?.length) {
                         this._populateHlsQualityLevels(data.levels);
+                    }
+                    if (this._isAudioOnlyManifest(data)) {
+                        this._setAudioOnlyUi(true);
                     }
                 });
                 hls.on(Hls.Events.ERROR, (_, data) => {
@@ -395,6 +417,43 @@
             }
 
             video.src = playUrl;
+        }
+
+        _isAudioOnlyManifest(data) {
+            const levels = Array.isArray(data?.levels) ? data.levels : [];
+            if (levels.length) {
+                return levels.every((lvl) => {
+                    const height = Number(lvl?.height || 0);
+                    const hasVideo = Boolean(lvl?.videoCodec) || height > 0;
+                    return !hasVideo;
+                });
+            }
+            return Array.isArray(data?.audioTracks) && data.audioTracks.length > 0;
+        }
+
+        _setAudioOnlyUi(on) {
+            const wrap = $('videoPlayer');
+            if (!wrap) return;
+            let badge = wrap.querySelector('[data-audio-only]');
+            if (!on) {
+                badge?.remove();
+                return;
+            }
+            if (!badge) {
+                badge = document.createElement('div');
+                badge.setAttribute('data-audio-only', '1');
+                badge.className =
+                    'pointer-events-none absolute inset-0 grid place-items-center bg-gradient-to-b from-ink-900/40 to-ink-950/80';
+                badge.innerHTML = `
+                    <div class="text-center px-4">
+                        <div class="mx-auto mb-3 grid h-16 w-16 place-items-center rounded-full bg-brand-400/15 ring-1 ring-brand-400/30 text-brand-300">
+                            <svg viewBox="0 0 24 24" class="h-8 w-8" fill="currentColor" aria-hidden="true"><path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/></svg>
+                        </div>
+                        <p class="font-display text-base font-semibold text-slate-100">Audio stream</p>
+                        <p class="text-sm text-slate-400 mt-1">This channel has sound only — no video.</p>
+                    </div>`;
+                wrap.appendChild(badge);
+            }
         }
 
         _playStream(url, name, opts = {}) {
@@ -601,16 +660,17 @@
             const countries = Array.isArray(data.countries) ? data.countries : [];
             const g = $('groupFilter');
             const c = $('countryFilter');
-            const toLabel = (v) => {
-                if (v == null) return '';
-                if (typeof v === 'string' || typeof v === 'number') return String(v);
-                if (typeof v === 'object') return String(v.name || v.code || v.label || '');
-                return String(v);
-            };
-            const fill = (sel, values, placeholder, current) => {
+
+            const fillGroups = (sel, values, placeholder, current) => {
                 if (!sel) return;
-                const labels = values.map(toLabel).filter(Boolean);
-                // Pin Test at bottom if present
+                const labels = values
+                    .map((v) => {
+                        if (v == null) return '';
+                        if (typeof v === 'string' || typeof v === 'number') return String(v);
+                        if (typeof v === 'object') return String(v.name || v.label || '');
+                        return String(v);
+                    })
+                    .filter(Boolean);
                 const testIdx = labels.findIndex((x) => x === 'Test');
                 if (testIdx >= 0) {
                     labels.splice(testIdx, 1);
@@ -631,8 +691,44 @@
                         .join('');
                 if (preserve) sel.value = preserve;
             };
-            fill(g, groups, 'All groups', this.group);
-            fill(c, countries, 'All countries', this.country);
+
+            const fillCountries = (sel, values, placeholder, current) => {
+                if (!sel) return;
+                const opts = values
+                    .map((v) => {
+                        if (v == null) return null;
+                        if (typeof v === 'string' || typeof v === 'number') {
+                            const s = String(v);
+                            return { value: s, label: s };
+                        }
+                        if (typeof v === 'object') {
+                            const code = String(v.code || v.value || '').trim();
+                            const name = String(v.name || v.label || code).trim();
+                            if (!code && !name) return null;
+                            return {
+                                value: code || name,
+                                label: name && code && name !== code ? name : name || code,
+                            };
+                        }
+                        return null;
+                    })
+                    .filter(Boolean);
+                opts.sort((a, b) => a.label.localeCompare(b.label));
+                const known = new Set(opts.map((o) => o.value));
+                const preserve = current && known.has(current) ? current : '';
+                sel.innerHTML =
+                    `<option value="">${placeholder}</option>` +
+                    opts
+                        .map(
+                            (o) =>
+                                `<option value="${escapeHtml(o.value)}">${escapeHtml(o.label)}</option>`
+                        )
+                        .join('');
+                if (preserve) sel.value = preserve;
+            };
+
+            fillGroups(g, groups, 'All categories', this.group);
+            fillCountries(c, countries, 'All countries', this.country);
         }
 
         // ------------------------- rendering ------------------------------
@@ -716,8 +812,6 @@
                     ? `<span class="inline-flex items-center gap-1 rounded-full bg-brand-500/10 text-brand-200 text-[10px] font-semibold px-1.5 py-0.5 ring-1 ring-brand-500/20">HD</span>`
                     : '';
 
-            const isFav = this.favorites.has(channel.url);
-
             const logoHtml = channel.icon_url
                 ? `<img src="${escapeHtml(channel.icon_url)}" alt="" loading="lazy"
                         class="h-10 w-10 rounded-lg object-contain bg-black/40 ring-1 ring-white/5"
@@ -746,29 +840,9 @@
                             <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
                             Play
                         </button>
-                        <details class="relative more-menu">
-                            <summary class="list-none cursor-pointer inline-grid place-items-center h-9 w-9 rounded-full text-slate-300 hover:text-slate-100 hover:bg-white/5 ring-1 ring-white/10 focus:outline-none focus:ring-2 focus:ring-brand-400/40" aria-label="More actions" title="More">
-                                <svg viewBox="0 0 24 24" class="h-4 w-4" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>
-                            </summary>
-                            <div class="absolute right-0 mt-1 w-44 rounded-xl border border-white/10 bg-ink-800/95 backdrop-blur shadow-2xl p-1 z-20">
-                                <button type="button" data-action="fav" class="fav-btn w-full text-left rounded-lg px-2.5 py-1.5 text-sm hover:bg-white/5 flex items-center gap-2">
-                                    <svg viewBox="0 0 24 24" class="h-4 w-4 ${isFav ? 'text-amber-300' : 'text-slate-400'}" fill="currentColor"><path d="M12 17.3 6.2 21l1.5-6.6L2.5 9.9l6.7-.6L12 3l2.8 6.3 6.7.6-5.2 4.5L17.8 21z"/></svg>
-                                    <span class="fav-label">${isFav ? 'Remove from My list' : 'Add to My list'}</span>
-                                </button>
-                                <button type="button" data-action="copy" class="w-full text-left rounded-lg px-2.5 py-1.5 text-sm hover:bg-white/5 flex items-center gap-2">
-                                    <svg viewBox="0 0 24 24" class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg>
-                                    Copy stream link
-                                </button>
-                                <button type="button" data-action="vlc" class="w-full text-left rounded-lg px-2.5 py-1.5 text-sm hover:bg-white/5 flex items-center gap-2">
-                                    <svg viewBox="0 0 24 24" class="h-4 w-4 text-slate-400" fill="currentColor"><path d="M12 3 4 20h16Z"/></svg>
-                                    Open in VLC
-                                </button>
-                                <button type="button" data-action="web" class="w-full text-left rounded-lg px-2.5 py-1.5 text-sm hover:bg-white/5 flex items-center gap-2">
-                                    <svg viewBox="0 0 24 24" class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"/></svg>
-                                    Open in new tab
-                                </button>
-                            </div>
-                        </details>
+                        <button type="button" class="more-btn inline-grid place-items-center h-9 w-9 rounded-full text-slate-300 hover:text-slate-100 hover:bg-white/5 ring-1 ring-white/10 focus:outline-none focus:ring-2 focus:ring-brand-400/40" aria-label="More actions" aria-haspopup="menu" title="More">
+                            <svg viewBox="0 0 24 24" class="h-4 w-4" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>
+                        </button>
                     </div>
                 </div>
             `;
@@ -779,12 +853,114 @@
                 this.selectAndPlay(channel);
             });
 
-            card.querySelector('[data-action="fav"]')?.addEventListener('click', (e) => {
+            card.querySelector('.more-btn')?.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                this._openChannelMenu(e.currentTarget, channel);
+            });
+
+            // Whole-card click plays too (but not on nested buttons).
+            card.addEventListener('click', (e) => {
+                if (e.target.closest('button')) return;
+                this.selectAndPlay(channel);
+            });
+
+            return card;
+        }
+
+        // ------------------------- floating channel menu ------------------
+        _setupChannelMenu() {
+            if (this._channelMenu) return;
+            const menu = document.createElement('div');
+            menu.id = 'channelActionMenu';
+            menu.setAttribute('role', 'menu');
+            menu.hidden = true;
+            menu.className =
+                'fixed z-[100] w-48 rounded-xl border border-white/10 bg-ink-800/95 backdrop-blur shadow-2xl p-1';
+            document.body.appendChild(menu);
+            this._channelMenu = menu;
+
+            document.addEventListener('pointerdown', (e) => {
+                if (menu.hidden) return;
+                if (menu.contains(e.target)) return;
+                if (this._channelMenuTrigger?.contains(e.target)) return;
+                this._closeChannelMenu();
+            });
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') this._closeChannelMenu();
+            });
+            window.addEventListener('resize', this._boundCloseChannelMenu);
+            $('channelsList')?.addEventListener('scroll', this._boundCloseChannelMenu, {
+                passive: true,
+            });
+            window.addEventListener('scroll', this._boundCloseChannelMenu, { passive: true });
+        }
+
+        _closeChannelMenu() {
+            const menu = this._channelMenu;
+            if (!menu || menu.hidden) return;
+            menu.hidden = true;
+            menu.innerHTML = '';
+            this._channelMenuChannel = null;
+            this._channelMenuTrigger = null;
+        }
+
+        _repositionChannelMenu() {
+            const menu = this._channelMenu;
+            const trigger = this._channelMenuTrigger;
+            if (!menu || menu.hidden || !trigger) return;
+            const rect = trigger.getBoundingClientRect();
+            const mw = menu.offsetWidth || 192;
+            const mh = menu.offsetHeight || 168;
+            let top = rect.bottom + 6;
+            let left = rect.right - mw;
+            if (left < 8) left = 8;
+            if (left + mw > window.innerWidth - 8) left = Math.max(8, window.innerWidth - mw - 8);
+            if (top + mh > window.innerHeight - 8) {
+                top = Math.max(8, rect.top - mh - 6);
+            }
+            menu.style.top = `${Math.round(top)}px`;
+            menu.style.left = `${Math.round(left)}px`;
+        }
+
+        _openChannelMenu(trigger, channel) {
+            this._setupChannelMenu();
+            const menu = this._channelMenu;
+            if (!menu || !channel?.url) return;
+
+            // Toggle closed if same trigger re-clicked.
+            if (!menu.hidden && this._channelMenuTrigger === trigger) {
+                this._closeChannelMenu();
+                return;
+            }
+
+            const isFav = this.favorites.has(channel.url);
+            menu.innerHTML = `
+                <button type="button" role="menuitem" data-action="fav" class="fav-btn w-full text-left rounded-lg px-2.5 py-1.5 text-sm hover:bg-white/5 flex items-center gap-2">
+                    <svg viewBox="0 0 24 24" class="h-4 w-4 ${isFav ? 'text-amber-300' : 'text-slate-400'}" fill="currentColor"><path d="M12 17.3 6.2 21l1.5-6.6L2.5 9.9l6.7-.6L12 3l2.8 6.3 6.7.6-5.2 4.5L17.8 21z"/></svg>
+                    <span class="fav-label">${isFav ? 'Remove from My list' : 'Add to My list'}</span>
+                </button>
+                <button type="button" role="menuitem" data-action="copy" class="w-full text-left rounded-lg px-2.5 py-1.5 text-sm hover:bg-white/5 flex items-center gap-2">
+                    <svg viewBox="0 0 24 24" class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg>
+                    Copy stream link
+                </button>
+                <button type="button" role="menuitem" data-action="vlc" class="w-full text-left rounded-lg px-2.5 py-1.5 text-sm hover:bg-white/5 flex items-center gap-2">
+                    <svg viewBox="0 0 24 24" class="h-4 w-4 text-slate-400" fill="currentColor"><path d="M12 3 4 20h16Z"/></svg>
+                    Open in VLC
+                </button>
+                <button type="button" role="menuitem" data-action="web" class="w-full text-left rounded-lg px-2.5 py-1.5 text-sm hover:bg-white/5 flex items-center gap-2">
+                    <svg viewBox="0 0 24 24" class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"/></svg>
+                    Open in new tab
+                </button>
+            `;
+
+            menu.querySelector('[data-action="fav"]')?.addEventListener('click', (e) => {
                 e.preventDefault();
                 e.stopPropagation();
                 this.toggleFavorite(channel.url);
+                this._closeChannelMenu();
             });
-            card.querySelector('[data-action="copy"]')?.addEventListener('click', (e) => {
+            menu.querySelector('[data-action="copy"]')?.addEventListener('click', (e) => {
                 e.preventDefault();
                 e.stopPropagation();
                 if (navigator.clipboard?.writeText) {
@@ -797,8 +973,9 @@
                 } else {
                     this.notify('Copy not supported here', 'error');
                 }
+                this._closeChannelMenu();
             });
-            card.querySelector('[data-action="vlc"]')?.addEventListener('click', (e) => {
+            menu.querySelector('[data-action="vlc"]')?.addEventListener('click', (e) => {
                 e.preventDefault();
                 e.stopPropagation();
                 try {
@@ -807,20 +984,19 @@
                 } catch {
                     this.notify('Could not launch VLC', 'error');
                 }
+                this._closeChannelMenu();
             });
-            card.querySelector('[data-action="web"]')?.addEventListener('click', (e) => {
+            menu.querySelector('[data-action="web"]')?.addEventListener('click', (e) => {
                 e.preventDefault();
                 e.stopPropagation();
                 window.open(channel.url, '_blank', 'noopener');
+                this._closeChannelMenu();
             });
 
-            // Whole-card click plays too (but not on nested buttons/menus).
-            card.addEventListener('click', (e) => {
-                if (e.target.closest('button') || e.target.closest('details')) return;
-                this.selectAndPlay(channel);
-            });
-
-            return card;
+            this._channelMenuChannel = channel;
+            this._channelMenuTrigger = trigger;
+            menu.hidden = false;
+            this._repositionChannelMenu();
         }
 
         _syncFavButton(btn, url) {

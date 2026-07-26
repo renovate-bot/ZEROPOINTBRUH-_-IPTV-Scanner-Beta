@@ -370,8 +370,21 @@ class ChannelStore:
             clauses.append("group_title = ?")
             params.append(group)
         if country:
-            clauses.append("country = ?")
-            params.append(country)
+            from .geo import country_code_to_name, country_name_to_code
+
+            # Accept ISO code or English name from the UI.
+            code = country_name_to_code(country) or (
+                country.strip().upper() if len(country.strip()) == 2 else country.strip().upper()
+            )
+            name = country_code_to_name(code) or country.strip()
+            # Many playlists put the country in group-title and leave country blank/GLOBAL.
+            clauses.append(
+                "("
+                " UPPER(COALESCE(country, '')) = ?"
+                " OR LOWER(COALESCE(group_title, '')) = LOWER(?)"
+                ")"
+            )
+            params.extend([code, name])
         if online_only:
             clauses.append("status = 'online'")
         elif status:
@@ -412,14 +425,55 @@ class ChannelStore:
             " WHERE group_title IS NOT NULL AND group_title != ''"
             " GROUP BY group_title ORDER BY group_title COLLATE NOCASE"
         ).fetchall()
-        groups = [{"name": r[0], "count": int(r[1])} for r in groups_rows]
+        from .geo import country_code_to_name, is_country_like_group
+
+        # Category menu: drop country names (those belong in Countries).
+        groups = [
+            {"name": r[0], "count": int(r[1])}
+            for r in groups_rows
+            if not is_country_like_group(r[0])
+        ]
 
         countries_rows = self._execute(
             "SELECT country, COUNT(*) FROM channels"
             " WHERE country IS NOT NULL AND country != ''"
+            " AND UPPER(country) NOT IN ('GLOBAL', 'XX', 'ZZ', 'UNKNOWN', 'UNDEFINED')"
             " GROUP BY country ORDER BY country COLLATE NOCASE"
         ).fetchall()
-        countries = [{"code": r[0], "count": int(r[1])} for r in countries_rows]
+        countries = []
+        seen_codes: set[str] = set()
+        for r in countries_rows:
+            code = (r[0] or "").strip().upper()
+            if not code or code in seen_codes:
+                continue
+            seen_codes.add(code)
+            countries.append(
+                {
+                    "code": code,
+                    "name": country_code_to_name(code) or code,
+                    "count": int(r[1]),
+                }
+            )
+
+        # Also surface countries that only appear as group-title labels.
+        for r in groups_rows:
+            label = r[0]
+            if not is_country_like_group(label):
+                continue
+            from .geo import country_name_to_code
+
+            code = country_name_to_code(label)
+            if not code or code in seen_codes:
+                continue
+            seen_codes.add(code)
+            countries.append(
+                {
+                    "code": code,
+                    "name": country_code_to_name(code) or label,
+                    "count": int(r[1]),
+                }
+            )
+        countries.sort(key=lambda c: (c.get("name") or c.get("code") or "").lower())
 
         total_pages = (total + limit - 1) // limit if limit > 0 else 1
         return {
@@ -578,7 +632,7 @@ class ChannelStore:
 
     # --------------------------------------------------------------- ingest
 
-    def upsert_from_ingest(self, channels: Sequence[dict]) -> int:
+    def upsert_from_ingest(self, channels: Sequence[dict]) -> dict:
         """Insert or update channel metadata from an ingest pass.
 
         * New URLs (or URLs whose ``url_norm`` isn't already in the store) are
@@ -587,19 +641,23 @@ class ChannelStore:
         * Existing rows keep their status; only descriptive metadata is updated
           (name, tvg_id, tvg_logo, group_title, country, ...).
         * Normalization helpers are always applied before writing.
-        """
-        if not channels:
-            return 0
 
-        touched = 0
+        Returns a summary dict: ``{new, updated, skipped}``.
+        """
+        summary = {"new": 0, "updated": 0, "skipped": 0}
+        if not channels:
+            return summary
+
         now = time.time()
         with self.transaction() as conn:
             for raw in channels:
                 if not isinstance(raw, dict):
+                    summary["skipped"] += 1
                     continue
                 ch = dict(raw)
                 url = (ch.get("url") or "").strip()
                 if not url:
+                    summary["skipped"] += 1
                     continue
                 ch["url"] = url
                 normalize_channel(ch)
@@ -650,7 +708,7 @@ class ChannelStore:
                         f"UPDATE channels SET {', '.join(updates)} WHERE url = ?",
                         params,
                     )
-                    touched += 1
+                    summary["updated"] += 1
                     continue
 
                 media_type = ch.get("media_type") or classify_media_type(url)
@@ -686,11 +744,11 @@ class ChannelStore:
                         ch.get("variant_bandwidth"),
                     ),
                 )
-                touched += 1
+                summary["new"] += 1
 
-        if touched:
+        if summary["new"] or summary["updated"]:
             self.bump_revision()
-        return touched
+        return summary
 
     # ------------------------------------------------------------- variants
 

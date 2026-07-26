@@ -50,9 +50,9 @@ details > summary::-webkit-details-marker {
     display: none;
 }
 
-/* Auto-close open More menus when clicking elsewhere is handled in JS on card level. */
-.more-menu[open] > summary {
-    background-color: rgba(255, 255, 255, 0.05);
+/* Floating channel action menu is portaled to body (see scripts.js). */
+#channelActionMenu[hidden] {
+    display: none !important;
 }
 
 /* Fullscreen video niceties. */

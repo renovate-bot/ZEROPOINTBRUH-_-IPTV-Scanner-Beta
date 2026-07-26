@@ -33,12 +33,12 @@ from flask import (
 
 import state
 from app_factory import app
-from features.storage.channels_io import get_valid_channels, load_json_file
+from features.storage.channels_io import get_valid_channels
 from config import (
-    FILES,
     HEADERS,
     IPTV_PLAYLIST_SECRET,
     IPTV_SITE_NAME,
+    STREAM_HEADERS,
     SWEEP_INTERVAL_SEC,
 )
 from features.icons.icons import download_channel_icon
@@ -55,7 +55,6 @@ from features.seo.seo import (
     seo_refresh_slug_index,
     seo_slug_snapshot,
 )
-from features.workers.workers import initial_scan, sweep_channels_async
 
 
 # --- SEO endpoints ------------------------------------------------------------
@@ -389,14 +388,8 @@ def get_channel_info(channel_name, channel_url):
 def get_channel_info_endpoint(channel_name):
     """API endpoint to get channel information."""
     try:
-        with open(FILES['streams'], 'r') as f:
-            channels = json.load(f)
-
-        channel = None
-        for ch in channels:
-            if ch['name'] == channel_name:
-                channel = ch
-                break
+        channels = get_valid_channels()
+        channel = next((ch for ch in channels if ch.get('name') == channel_name), None)
 
         if channel:
             info = get_channel_info(channel['name'], channel['url'])
@@ -601,9 +594,7 @@ def proxy_image():
 def download_all_icons():
     """Download icons for all channels."""
     try:
-        with open(FILES['streams'], 'r') as f:
-            channels = json.load(f)
-
+        channels = get_valid_channels()
         downloaded = 0
         failed = 0
 
@@ -635,9 +626,8 @@ def search_channels():
     """Search for channels by name."""
     try:
         query = request.args.get('query', '').lower()
-        with open(FILES['streams'], 'r') as f:
-            channels = json.load(f)
-        return jsonify([ch for ch in channels if query in ch['name'].lower()])
+        channels = get_valid_channels()
+        return jsonify([ch for ch in channels if query in (ch.get('name') or '').lower()])
     except Exception as e:
         logging.error(f"Error searching channels: {e}")
         return jsonify([])
@@ -812,25 +802,32 @@ def _url_looks_like_hls_manifest(url: str) -> bool:
 
 
 def rewrite_hls_playlist_for_proxy(body: str, resolved_base_url: str) -> str:
-    """Rewrite manifest lines so absolute/relative URLs are fetched through /proxy/stream."""
-    uri_in_tag = re.compile(r'URI="([^"]+)"')
+    """Rewrite manifest lines so absolute/relative URLs are fetched through /proxy/stream.
+
+    This keeps the browser same-origin even when the upstream playlist is plain
+    ``http://`` (avoids mixed-content blocks on an HTTPS site).
+    """
+    uri_in_tag = re.compile(r'URI=(["\'])([^"\']+)\1')
     lines_out = []
+
+    def proxied(target: str) -> str:
+        target = (target or "").strip()
+        if not target or target.startswith("/proxy/stream?"):
+            return target
+        if target.startswith(("http://", "https://")):
+            resolved = target
+        else:
+            resolved = urllib.parse.urljoin(resolved_base_url, target)
+        return f"/proxy/stream?url={quote(resolved, safe='')}"
 
     for raw in body.splitlines():
         stripped = raw.strip()
-        if stripped.startswith('#'):
-            if 'URI="' in raw:
+        if stripped.startswith("#"):
+            if "URI=" in raw:
 
                 def repl_tag(m):
-                    inner = m.group(1)
-                    if inner.startswith('/proxy/stream?'):
-                        return m.group(0)
-                    if inner.startswith(('http://', 'https://')):
-                        resolved = inner
-                    else:
-                        resolved = urllib.parse.urljoin(resolved_base_url, inner)
-                    enc = quote(resolved, safe='')
-                    return f'URI="/proxy/stream?url={enc}"'
+                    quote_ch, inner = m.group(1), m.group(2)
+                    return f"URI={quote_ch}{proxied(inner)}{quote_ch}"
 
                 raw = uri_in_tag.sub(repl_tag, raw)
             lines_out.append(raw)
@@ -838,17 +835,9 @@ def rewrite_hls_playlist_for_proxy(body: str, resolved_base_url: str) -> str:
         if not stripped:
             lines_out.append(raw)
             continue
-        if stripped.startswith('/proxy/stream?'):
-            lines_out.append(stripped)
-            continue
-        if stripped.startswith(('http://', 'https://')):
-            resolved = stripped
-        else:
-            resolved = urllib.parse.urljoin(resolved_base_url, stripped)
-        enc = quote(resolved, safe='')
-        lines_out.append(f'/proxy/stream?url={enc}')
+        lines_out.append(proxied(stripped))
 
-    return '\n'.join(lines_out)
+    return "\n".join(lines_out)
 
 
 @app.route('/proxy/stream')
@@ -896,57 +885,125 @@ def proxy_stream():
         return jsonify({'error': str(e)}), 500
 
 
+def _looks_like_hls_text(text: str) -> bool:
+    head = (text or "").lstrip()[:64]
+    return head.startswith("#EXTM3U")
+
+
 def proxy_direct_stream(url):
-    """Proxy direct streams (progressive passthrough or HLS manifest rewrite + segment relay)."""
-    cors = {'Access-Control-Allow-Origin': '*'}
+    """Proxy direct streams (progressive passthrough or HLS manifest rewrite + segment relay).
+
+    Upstream fetches intentionally omit ``Upgrade-Insecure-Requests`` so plain
+    ``http://`` IPTV origins are not coerced onto HTTPS.
+    """
+    cors = {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Headers": "*",
+        "Cache-Control": "no-store",
+    }
     try:
-        ct_hint = ''
-        if _url_looks_like_hls_manifest(url):
-            upstream = requests.get(url, headers=HEADERS, timeout=45)
-            if upstream.status_code != 200:
-                return jsonify({'error': f'Upstream HTTP {upstream.status_code}'}), upstream.status_code
+        # Prefer treating known playlist URLs as text up-front.
+        force_playlist = _url_looks_like_hls_manifest(url)
+
+        upstream = requests.get(
+            url,
+            headers=STREAM_HEADERS,
+            timeout=45 if force_playlist else 120,
+            stream=not force_playlist,
+            allow_redirects=True,
+        )
+        if upstream.status_code != 200:
+            try:
+                upstream.close()
+            except Exception:
+                pass
+            return jsonify({"error": f"Upstream HTTP {upstream.status_code}"}), (
+                upstream.status_code if upstream.status_code >= 400 else 502
+            )
+
+        # Keep relative URL joins on the final upstream location (after redirects),
+        # but never invent an https upgrade ourselves.
+        resolved_base = upstream.url or url
+        ct = (upstream.headers.get("Content-Type") or "").lower()
+
+        if force_playlist:
             body = upstream.content
-            ct_hint = upstream.headers.get('Content-Type') or ''
-
-            if len(body) <= MAX_HLS_PLAYLIST_BYTES:
-                text = body.decode('utf-8', errors='replace')
-                if text.lstrip().startswith('#EXTM3U'):
-                    text = rewrite_hls_playlist_for_proxy(text, upstream.url)
-                    return Response(
-                        text,
-                        mimetype='application/vnd.apple.mpegurl',
-                        headers={**cors, 'Cache-Control': 'no-store'},
-                    )
-
-            # Large or non-manifest body from .m3u URL — passthrough binary
+            text = body.decode("utf-8", errors="replace")
+            if _looks_like_hls_text(text) and len(body) <= MAX_HLS_PLAYLIST_BYTES:
+                text = rewrite_hls_playlist_for_proxy(text, resolved_base)
+                return Response(
+                    text,
+                    mimetype="application/vnd.apple.mpegurl",
+                    headers=cors,
+                )
             return Response(
                 body,
-                content_type=ct_hint or 'application/octet-stream',
+                content_type=ct or "application/octet-stream",
                 headers=cors,
             )
 
-        response = requests.get(url, headers=HEADERS, stream=True, timeout=120)
-        if response.status_code != 200:
-            response.close()
-            return jsonify({'error': f'Upstream HTTP {response.status_code}'}), 502
+        # Peek first bytes for playlists that omit .m3u8 in the path
+        # (common for http://host:port/play/xxxx endpoints).
+        peek = b""
+        for chunk in upstream.iter_content(chunk_size=65536):
+            if chunk:
+                peek = chunk
+                break
+
+        peek_text = peek.decode("utf-8", errors="replace") if peek else ""
+        is_playlist = (
+            "mpegurl" in ct
+            or "application/vnd.apple.mpegurl" in ct
+            or "audio/mpegurl" in ct
+            or "application/x-mpegurl" in ct
+            or _looks_like_hls_text(peek_text)
+        )
+
+        if is_playlist and len(peek) <= MAX_HLS_PLAYLIST_BYTES:
+            parts = [peek]
+            total = len(peek)
+            for chunk in upstream.iter_content(chunk_size=65536):
+                if not chunk:
+                    continue
+                parts.append(chunk)
+                total += len(chunk)
+                if total > MAX_HLS_PLAYLIST_BYTES:
+                    break
+            body = b"".join(parts)
+            upstream.close()
+            text = body.decode("utf-8", errors="replace")
+            if _looks_like_hls_text(text):
+                text = rewrite_hls_playlist_for_proxy(text, resolved_base)
+                return Response(
+                    text,
+                    mimetype="application/vnd.apple.mpegurl",
+                    headers=cors,
+                )
+            return Response(
+                body,
+                content_type=ct or "application/octet-stream",
+                headers=cors,
+            )
 
         def generate():
             try:
-                for chunk in response.iter_content(chunk_size=65536):
+                if peek:
+                    yield peek
+                for chunk in upstream.iter_content(chunk_size=65536):
                     if chunk:
                         yield chunk
             finally:
-                response.close()
+                upstream.close()
 
         return Response(
             stream_with_context(generate()),
-            content_type=response.headers.get('Content-Type', 'application/octet-stream'),
+            content_type=upstream.headers.get("Content-Type", "application/octet-stream"),
             headers=cors,
         )
 
     except Exception as e:
         logging.error(f"Error proxying direct stream: {e}")
-        return jsonify({'error': 'Failed to proxy stream'}), 500
+        return jsonify({"error": "Failed to proxy stream"}), 500
 
 
 @app.route("/admin/backup")
