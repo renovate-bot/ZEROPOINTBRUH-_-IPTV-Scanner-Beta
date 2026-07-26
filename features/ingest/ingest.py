@@ -141,13 +141,119 @@ def parse_url_list_content(content):
     return urls
 
 
+def _repo_root():
+    here = os.path.abspath(os.path.dirname(__file__))
+    return os.path.abspath(os.path.join(here, "..", ".."))
+
+
+def _resolve_local_playlist(entry: str):
+    """Resolve a local playlist path; return absolute path if it exists."""
+    raw = (entry or "").strip()
+    if not raw:
+        return None
+    if raw.startswith("file://"):
+        raw = raw[7:]
+        if raw.startswith("/") and len(raw) > 2 and raw[2] == ":":
+            # file:///C:/...
+            raw = raw[1:]
+    if raw.startswith("http://") or raw.startswith("https://"):
+        return None
+
+    candidates = []
+    if os.path.isabs(raw):
+        candidates.append(raw)
+    else:
+        for base in (os.getcwd(), _repo_root()):
+            candidates.append(os.path.normpath(os.path.join(base, raw)))
+
+    for path in candidates:
+        path = os.path.abspath(path)
+        if os.path.isfile(path) and path.lower().endswith((".m3u", ".m3u8", ".txt")):
+            return path
+    return None
+
+
+def load_playlist_text(source: str):
+    """Load playlist text from an http(s) URL or a local file path."""
+    source = (source or "").strip()
+    if not source:
+        return None
+    if source.startswith("http://") or source.startswith("https://"):
+        response = requests.get(source, timeout=30, headers=HEADERS)
+        if response.status_code != 200:
+            raise requests.HTTPError(f"HTTP {response.status_code} for {source}")
+        return response.text
+
+    path = _resolve_local_playlist(source) or (
+        os.path.abspath(source) if os.path.isfile(source) else None
+    )
+    if not path:
+        raise FileNotFoundError(f"Local playlist not found: {source}")
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        return fh.read()
+
+
 def get_extra_m3u_sources():
-    """Return externally configured playlist sources (comma/newline separated URLs)."""
-    if not EXTRA_M3U_URLS_ENV:
-        return []
-    raw = EXTRA_M3U_URLS_ENV.replace('\n', ',')
-    urls = [u.strip() for u in raw.split(',') if u.strip()]
-    return [u for u in urls if u.startswith('http://') or u.startswith('https://')]
+    """Return extra playlist URLs/paths from env, ``playlists.txt``, and ``playlists/``."""
+    urls: list[str] = []
+    seen: set[str] = set()
+
+    def _add(u: str) -> None:
+        u = (u or "").strip()
+        if not u or u.startswith("#"):
+            return
+        if u.startswith("http://") or u.startswith("https://"):
+            key = u
+            value = u
+        else:
+            path = _resolve_local_playlist(u)
+            if not path:
+                return
+            key = os.path.normcase(path)
+            value = path
+        if key in seen:
+            return
+        seen.add(key)
+        urls.append(value)
+
+    if EXTRA_M3U_URLS_ENV:
+        raw = EXTRA_M3U_URLS_ENV.replace("\n", ",")
+        for part in raw.split(","):
+            _add(part)
+
+    # Simple root file: one URL or local path per line.
+    repo_root = _repo_root()
+    for candidate in (
+        os.path.join(os.getcwd(), "playlists.txt"),
+        os.path.join(repo_root, "playlists.txt"),
+    ):
+        path = os.path.abspath(candidate)
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, encoding="utf-8") as fh:
+                for line in fh:
+                    _add(line)
+        except OSError:
+            pass
+        break
+
+    # Auto-include every .m3u / .m3u8 under playlists/
+    for playlists_dir in (
+        os.path.join(os.getcwd(), "playlists"),
+        os.path.join(repo_root, "playlists"),
+    ):
+        if not os.path.isdir(playlists_dir):
+            continue
+        try:
+            for name in sorted(os.listdir(playlists_dir)):
+                if name.lower().endswith((".m3u", ".m3u8")):
+                    _add(os.path.join(playlists_dir, name))
+        except OSError:
+            pass
+        break
+
+    return urls
 
 
 def parse_variant_attributes(attr_line):
@@ -321,14 +427,13 @@ def check_all_global_sources():
 
     logging.debug("Processing %s M3U sources...", len(all_m3u_sources))
 
-    # Process each M3U source
+    # Process each M3U source (http URL or local .m3u path)
     for i, source_url in enumerate(all_m3u_sources):
         try:
             logging.debug("Processing source %s/%s: %s", i + 1, len(all_m3u_sources), source_url)
 
-            response = requests.get(source_url, timeout=30, headers=HEADERS)
-            if response.status_code == 200:
-                content = response.text
+            content = load_playlist_text(source_url)
+            if content:
                 source_channels = []
                 current_channel = {}
                 plain_links = parse_url_list_content(content)
@@ -406,7 +511,7 @@ def check_all_global_sources():
                 logging.debug("Added %s channels from %s", len(source_channels), source_url)
 
             else:
-                logging.debug("Failed to fetch source %s: %s", source_url, response.status_code)
+                logging.debug("Failed to load source %s (empty)", source_url)
                 source_stats[source_url] = 0
 
         except Exception as e:

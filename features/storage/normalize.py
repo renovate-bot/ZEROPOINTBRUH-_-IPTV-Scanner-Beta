@@ -194,9 +194,17 @@ def normalize_group_title(channel: dict) -> str:
     Mutates ``channel`` in place and also returns the resulting group. Test
     streams are always forced into the ``"Test"`` group so they can be excluded
     from public listings by default.
+
+    Country / region names that playlists stuff into ``group-title`` are moved
+    into ``country`` and replaced with ``General`` so Categories stay clean.
     """
     if not isinstance(channel, dict):
         return ""
+
+    from .geo import (
+        DEFAULT_CATEGORY_AFTER_COUNTRY_SPLIT,
+        country_name_to_code,
+    )
 
     primary = _primary_group(channel.get("group_title"))
     if not primary:
@@ -204,6 +212,20 @@ def normalize_group_title(channel: dict) -> str:
 
     if is_test_channel({**channel, "group_title": primary}):
         primary = "Test"
+    else:
+        code = country_name_to_code(primary)
+        if code:
+            existing = (channel.get("country") or "").strip().upper()
+            if not existing or existing in (
+                "GLOBAL",
+                "XX",
+                "ZZ",
+                "UNKNOWN",
+                "UNDEFINED",
+                "",
+            ):
+                channel["country"] = code
+            primary = DEFAULT_CATEGORY_AFTER_COUNTRY_SPLIT
 
     channel["group_title"] = primary
     return primary

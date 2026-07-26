@@ -68,7 +68,21 @@ _SORT_COLUMNS = {
     "updated_at": "updated_at",
     "url": "url",
     "fail_count": "fail_count",
+    "trending": "trend_score",
+    "popular": "trend_score",
+    "trend_score": "trend_score",
+    "watch_count": "watch_count",
+    "last_watched_at": "last_watched_at",
+    "variant_quality": "variant_quality COLLATE NOCASE",
+    "variant_bandwidth": "variant_bandwidth",
 }
+
+# Exponential half-life for trending popularity (hours).
+TREND_HALF_LIFE_HOURS = 6.0
+# Ignore repeat plays of the same URL within this window.
+WATCH_MIN_INTERVAL_SEC = 120.0
+# Drop raw watch events older than this.
+WATCH_PRUNE_DAYS = 30
 
 
 SCHEMA_STATEMENTS: Sequence[str] = (
@@ -92,7 +106,11 @@ SCHEMA_STATEMENTS: Sequence[str] = (
         last_checked_at   REAL,
         updated_at        REAL,
         variant_quality   TEXT,
-        variant_bandwidth INTEGER
+        variant_bandwidth INTEGER,
+        trend_score       REAL DEFAULT 0,
+        watch_count       INTEGER DEFAULT 0,
+        last_watched_at   REAL,
+        trend_updated_at  REAL
     )
     """,
     """
@@ -131,6 +149,12 @@ SCHEMA_STATEMENTS: Sequence[str] = (
         created_at REAL
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS channel_watches (
+        url         TEXT NOT NULL,
+        watched_at  REAL NOT NULL
+    )
+    """,
 )
 
 INDEX_STATEMENTS: Sequence[str] = (
@@ -141,9 +165,20 @@ INDEX_STATEMENTS: Sequence[str] = (
     "CREATE INDEX IF NOT EXISTS idx_channels_last_checked_at ON channels(last_checked_at)",
     "CREATE INDEX IF NOT EXISTS idx_channels_url_norm ON channels(url_norm)",
     "CREATE INDEX IF NOT EXISTS idx_channels_variant_of ON channels(variant_of)",
+    "CREATE INDEX IF NOT EXISTS idx_channels_trend_score ON channels(trend_score)",
     "CREATE INDEX IF NOT EXISTS idx_variants_channel_url ON channel_variants(channel_url)",
     "CREATE INDEX IF NOT EXISTS idx_seo_slugs_channel_url ON seo_slugs(channel_url)",
     "CREATE INDEX IF NOT EXISTS idx_playlist_queue_depth ON playlist_queue(depth)",
+    "CREATE INDEX IF NOT EXISTS idx_channel_watches_watched_at ON channel_watches(watched_at)",
+    "CREATE INDEX IF NOT EXISTS idx_channel_watches_url ON channel_watches(url)",
+)
+
+# Columns added to existing DBs via ALTER (CREATE TABLE IF NOT EXISTS won't add them).
+_CHANNEL_COLUMN_MIGRATIONS: Sequence[tuple[str, str]] = (
+    ("trend_score", "REAL DEFAULT 0"),
+    ("watch_count", "INTEGER DEFAULT 0"),
+    ("last_watched_at", "REAL"),
+    ("trend_updated_at", "REAL"),
 )
 
 
@@ -167,6 +202,10 @@ CHANNEL_COLUMNS: tuple = (
     "updated_at",
     "variant_quality",
     "variant_bandwidth",
+    "trend_score",
+    "watch_count",
+    "last_watched_at",
+    "trend_updated_at",
 )
 
 
@@ -200,6 +239,13 @@ def ensure_db(path: Optional[str] = None) -> "ChannelStore":
                 logger.info("Imported %d channels from legacy JSON files", imported)
         except Exception as exc:
             logger.warning("Legacy JSON import skipped: %s", exc)
+
+    try:
+        moved = store.separate_country_groups()
+        if moved:
+            logger.info("Separated %d country group-titles into country codes", moved)
+    except Exception as exc:
+        logger.warning("Country/category separation skipped: %s", exc)
 
     with _default_store_lock:
         if path is None or os.path.abspath(db_path) == os.path.abspath(DEFAULT_DB_PATH):
@@ -260,6 +306,16 @@ class ChannelStore:
         with self.transaction() as conn:
             for statement in SCHEMA_STATEMENTS:
                 conn.execute(statement)
+            # Existing DBs created before trending columns need ALTER TABLE.
+            existing_cols = {
+                row[1]
+                for row in conn.execute("PRAGMA table_info(channels)").fetchall()
+            }
+            for col_name, col_type in _CHANNEL_COLUMN_MIGRATIONS:
+                if col_name not in existing_cols:
+                    conn.execute(
+                        f"ALTER TABLE channels ADD COLUMN {col_name} {col_type}"
+                    )
             for statement in INDEX_STATEMENTS:
                 conn.execute(statement)
             conn.execute(
@@ -456,7 +512,15 @@ class ChannelStore:
         sort_key = (sort or "name").lower()
         order_col = _SORT_COLUMNS.get(sort_key, _SORT_COLUMNS["name"])
         direction = "DESC" if str(sort_dir).lower() == "desc" else "ASC"
-        order_clause = f" ORDER BY {order_col} {direction}, url ASC"
+        if sort_key in ("trending", "popular", "trend_score"):
+            # Hot channels first; recent watches break ties.
+            order_clause = (
+                f" ORDER BY COALESCE(trend_score, 0) {direction},"
+                f" COALESCE(last_watched_at, 0) DESC,"
+                f" name COLLATE NOCASE ASC, url ASC"
+            )
+        else:
+            order_clause = f" ORDER BY {order_col} {direction}, url ASC"
 
         offset = (page - 1) * limit
         query_sql = (
@@ -694,6 +758,186 @@ class ChannelStore:
         if rows_written:
             self.bump_revision()
         return rows_written
+
+    def separate_country_groups(self) -> int:
+        """Peel country/region names out of ``group_title`` into ``country``.
+
+        Playlists often use Italy / UK / US as the M3U group. Those belong in
+        the Countries filter, not Categories. Idempotent — safe to run on every
+        startup.
+        """
+        from .geo import DEFAULT_CATEGORY_AFTER_COUNTRY_SPLIT, country_name_to_code
+
+        rows = self._execute(
+            "SELECT DISTINCT group_title FROM channels"
+            " WHERE group_title IS NOT NULL AND TRIM(group_title) != ''"
+        ).fetchall()
+        if not rows:
+            return 0
+
+        moved = 0
+        now = time.time()
+        with self.transaction() as conn:
+            for (label,) in rows:
+                code = country_name_to_code(label)
+                if not code:
+                    continue
+                cur = conn.execute(
+                    "UPDATE channels SET"
+                    " country = CASE"
+                    "   WHEN country IS NULL OR TRIM(country) = ''"
+                    "     OR UPPER(country) IN ('GLOBAL','XX','ZZ','UNKNOWN','UNDEFINED')"
+                    "   THEN ? ELSE country END,"
+                    " group_title = ?,"
+                    " updated_at = ?"
+                    " WHERE group_title = ?",
+                    (code, DEFAULT_CATEGORY_AFTER_COUNTRY_SPLIT, now, label),
+                )
+                moved += int(cur.rowcount or 0)
+
+        if moved:
+            self.bump_revision()
+        return moved
+
+    # ------------------------------------------------------------- trending
+
+    @staticmethod
+    def _decay_factor(hours: float, half_life: float = TREND_HALF_LIFE_HOURS) -> float:
+        if hours <= 0 or half_life <= 0:
+            return 1.0
+        return 0.5 ** (hours / half_life)
+
+    def record_watch(
+        self,
+        url: str,
+        *,
+        min_interval_sec: float = WATCH_MIN_INTERVAL_SEC,
+    ) -> Optional[dict]:
+        """Record a channel play and bump its decaying trend score.
+
+        Same URL is rate-limited to once per ``min_interval_sec``. Does not
+        bump the catalog revision (avoids thrashing soft-refresh for everyone).
+        """
+        url = (url or "").strip()
+        if not url:
+            return None
+
+        now = time.time()
+        with self.transaction() as conn:
+            row = conn.execute(
+                "SELECT url, trend_score, watch_count, last_watched_at, trend_updated_at"
+                " FROM channels WHERE url = ? OR url_norm = ? LIMIT 1",
+                (url, normalize_url(url)),
+            ).fetchone()
+            if not row:
+                return None
+
+            target = row[0]
+            score = float(row[1] or 0)
+            watch_count = int(row[2] or 0)
+            last_watched = row[3]
+            trend_updated = row[4]
+
+            if last_watched is not None and (now - float(last_watched)) < float(
+                min_interval_sec
+            ):
+                return {
+                    "ok": True,
+                    "recorded": False,
+                    "rate_limited": True,
+                    "url": target,
+                    "trend_score": score,
+                    "watch_count": watch_count,
+                }
+
+            baseline = trend_updated if trend_updated is not None else last_watched
+            if baseline is not None and score > 0:
+                hours = max(0.0, (now - float(baseline)) / 3600.0)
+                score *= self._decay_factor(hours)
+            score += 1.0
+            watch_count += 1
+
+            conn.execute(
+                "UPDATE channels SET trend_score = ?, watch_count = ?,"
+                " last_watched_at = ?, trend_updated_at = ? WHERE url = ?",
+                (score, watch_count, now, now, target),
+            )
+            conn.execute(
+                "INSERT INTO channel_watches(url, watched_at) VALUES (?, ?)",
+                (target, now),
+            )
+
+            # Prune occasionally (~1/40 of watches) to keep the event table small.
+            if watch_count % 40 == 0:
+                cutoff = now - (WATCH_PRUNE_DAYS * 86400.0)
+                conn.execute(
+                    "DELETE FROM channel_watches WHERE watched_at < ?",
+                    (cutoff,),
+                )
+
+        return {
+            "ok": True,
+            "recorded": True,
+            "rate_limited": False,
+            "url": target,
+            "trend_score": score,
+            "watch_count": watch_count,
+        }
+
+    def decay_trend_scores(self) -> int:
+        """Apply global exponential decay so inactive channels sink over time.
+
+        Uses ``meta.trend_decay_at`` so repeated calls within a short window are
+        no-ops. Updates ``trend_updated_at`` so the next watch does not
+        double-decay the same period.
+        """
+        now = time.time()
+        with self.transaction() as conn:
+            row = conn.execute(
+                "SELECT value FROM meta WHERE key = 'trend_decay_at'"
+            ).fetchone()
+            try:
+                last = float(row[0]) if row and row[0] is not None else None
+            except (TypeError, ValueError):
+                last = None
+
+            if last is None:
+                conn.execute(
+                    "INSERT INTO meta(key, value) VALUES ('trend_decay_at', ?)"
+                    " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    (str(now),),
+                )
+                return 0
+
+            hours = max(0.0, (now - last) / 3600.0)
+            if hours < (1.0 / 60.0):  # < ~1 minute
+                return 0
+
+            factor = self._decay_factor(hours)
+            if factor >= 0.9999:
+                conn.execute(
+                    "INSERT INTO meta(key, value) VALUES ('trend_decay_at', ?)"
+                    " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    (str(now),),
+                )
+                return 0
+
+            cur = conn.execute(
+                "UPDATE channels SET trend_score = trend_score * ?,"
+                " trend_updated_at = ?"
+                " WHERE trend_score IS NOT NULL AND trend_score > 0.0001",
+                (factor, now),
+            )
+            conn.execute(
+                "UPDATE channels SET trend_score = 0 WHERE trend_score IS NOT NULL"
+                " AND trend_score <= 0.0001"
+            )
+            conn.execute(
+                "INSERT INTO meta(key, value) VALUES ('trend_decay_at', ?)"
+                " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (str(now),),
+            )
+            return int(cur.rowcount or 0)
 
     # --------------------------------------------------------------- ingest
 

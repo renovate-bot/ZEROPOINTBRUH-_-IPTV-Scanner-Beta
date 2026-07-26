@@ -354,6 +354,31 @@ def api_report_alive():
         return jsonify({'ok': False, 'error': str(e)}), 500
 
 
+@app.route('/api/watch', methods=['POST'])
+def api_watch():
+    """Record a channel play for the trending / popularity chart.
+
+    Uses a time-decayed score so channels rise when watched and sink when
+    interest cools. Same URL is rate-limited server-side (~2 minutes).
+    """
+    try:
+        from features.storage.db import get_default_store
+
+        payload = request.get_json(silent=True) or {}
+        url = (payload.get('url') or request.form.get('url') or request.args.get('url') or '').strip()
+        if not url:
+            return jsonify({'ok': False, 'error': 'url required'}), 400
+
+        store = get_default_store()
+        result = store.record_watch(url)
+        if result is None:
+            return jsonify({'ok': False, 'error': 'unknown channel'}), 404
+        return jsonify(result)
+    except Exception as e:
+        logging.error('api/watch failed: %s', e)
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
 @app.route('/status')
 def get_status():
     """Return current scanning status and channel count."""
@@ -563,8 +588,9 @@ def get_channels():
             status = None
             status_in = ('pending', 'offline', 'error', 'unknown')
             media_type = None
-        sort = (request.args.get('sort') or 'name').strip()
-        sort_dir = (request.args.get('sort_dir') or 'asc').strip()
+        sort = (request.args.get('sort') or 'trending').strip()
+        default_dir = 'desc' if sort.lower() in ('trending', 'popular', 'trend_score', 'watch_count') else 'asc'
+        sort_dir = (request.args.get('sort_dir') or default_dir).strip()
 
         result = store.list_channels(
             page=page,

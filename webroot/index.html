@@ -249,6 +249,7 @@
                         </summary>
                         <div class="mt-2 grid grid-cols-2 gap-2">
                             <select id="sortFilter" class="w-full rounded-lg bg-ink-900 border border-white/10 text-sm text-slate-200 px-2.5 py-2">
+                                <option value="trending" selected>Trending</option>
                                 <option value="name">Sort by name</option>
                                 <option value="group_title">Sort by group</option>
                                 <option value="country">Sort by country</option>
@@ -257,8 +258,8 @@
                                 <option value="variant_bandwidth">Sort by bandwidth</option>
                             </select>
                             <select id="sortDir" class="w-full rounded-lg bg-ink-900 border border-white/10 text-sm text-slate-200 px-2.5 py-2">
+                                <option value="desc" selected>Descending</option>
                                 <option value="asc">Ascending</option>
-                                <option value="desc">Descending</option>
                             </select>
                         </div>
                     </details>
@@ -344,7 +345,7 @@
 
     <!-- Scripts -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.5.15/hls.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-    <script src="{{ url_for('static', filename='js/scripts.js') }}?v=7"></script>
+    <script src="{{ url_for('static', filename='js/scripts.js') }}?v=8"></script>
 
     <!-- SW registration -->
     <script>

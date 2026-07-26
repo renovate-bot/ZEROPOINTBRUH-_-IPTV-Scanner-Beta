@@ -255,11 +255,19 @@ async def run_active_health_batch(
     batch = store.claim_active_batch(limit)
     if not batch:
         log.debug("active-health: nothing to check")
+        try:
+            store.decay_trend_scores()
+        except Exception:  # noqa: BLE001
+            log.debug("active-health: trend decay skipped", exc_info=True)
         return {"claimed": 0}
 
     started = time.perf_counter()
     results = await _validate_batch(batch)
     store.update_channel_results(_results_to_dicts(results))
+    try:
+        store.decay_trend_scores()
+    except Exception:  # noqa: BLE001
+        log.debug("active-health: trend decay skipped", exc_info=True)
     summary = _summarize_results(results)
     summary["claimed"] = len(batch)
     summary["elapsed_sec"] = round(time.perf_counter() - started, 2)

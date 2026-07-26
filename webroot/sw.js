@@ -2,7 +2,7 @@
 // Streams (/proxy/stream), /channels, /status, /api/*, and /icons/* are always network.
 // JS/CSS use network-first so UI fixes apply without fighting a stale cache.
 
-const SHELL_CACHE = 'iptv-shell-v7';
+const SHELL_CACHE = 'iptv-shell-v8';
 const SHELL_URLS = [
     '/',
     '/js/scripts.js',

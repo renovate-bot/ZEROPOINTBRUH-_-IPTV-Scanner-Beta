@@ -1,0 +1,13 @@
+# Extra M3U / playlist URLs or local paths (one per line).
+# Lines starting with # are ignored.
+# These are loaded on ingest in addition to the built-in list in:
+#   features/ingest/sources.py
+#
+# Examples:
+# https://example.com/my-channels.m3u
+# playlists/my-local.m3u
+#
+# You can also set env IPTV_EXTRA_M3U_URLS=url1,url2
+# Any .m3u / .m3u8 under the playlists/ folder is auto-included.
+
+playlists/custom-pr-la-us.m3u

@@ -76,8 +76,8 @@
             this.search = '';
             this.group = '';
             this.country = '';
-            this.sort = 'name';
-            this.sortDir = 'asc';
+            this.sort = 'trending';
+            this.sortDir = 'desc';
 
             this.currentChannel = null;
             this.hls = null;
@@ -90,6 +90,7 @@
             this._channelMenuTrigger = null;
             this._boundCloseChannelMenu = this._closeChannelMenu.bind(this);
             this._aliveReported = new Set();
+            this._watchReported = new Set();
             this._filterSheetKind = null;
             this._filterSheetOptions = [];
         }
@@ -232,6 +233,15 @@
 
             sort?.addEventListener('change', () => {
                 this.sort = sort.value;
+                if (
+                    ['trending', 'popular', 'trend_score', 'watch_count'].includes(
+                        sort.value
+                    ) &&
+                    dir
+                ) {
+                    dir.value = 'desc';
+                    this.sortDir = 'desc';
+                }
                 this.reload({ resetScroll: true });
             });
             dir?.addEventListener('change', () => {
@@ -673,6 +683,7 @@
             if (inf) inf.textContent = meta;
 
             this._playStream(channel.url, channel.name || '');
+            this._recordWatch(channel);
 
             // If HLS variants are known on the server, list them too (Safari can use them).
             if (channel.quality_count && channel.quality_count > 0) {
@@ -688,6 +699,19 @@
             });
 
             this.notify(`Now playing: ${channel.name || 'stream'}`);
+        }
+
+        _recordWatch(channel) {
+            const url = channel?.url;
+            if (!url || this._watchReported.has(url)) return;
+            this._watchReported.add(url);
+            fetch('/api/watch', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url }),
+            }).catch(() => {
+                this._watchReported.delete(url);
+            });
         }
 
         _maybeReportAlive() {

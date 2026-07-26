@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-# ISO 3166-1 alpha-2 → English short name (subset covering this catalog).
+# ISO 3166-1 alpha-2 (+ a few catalog regions) → English short name.
 COUNTRY_CODE_TO_NAME: dict[str, str] = {
     "AD": "Andorra",
     "AE": "United Arab Emirates",
@@ -58,6 +58,7 @@ COUNTRY_CODE_TO_NAME: dict[str, str] = {
     "KR": "South Korea",
     "KW": "Kuwait",
     "KZ": "Kazakhstan",
+    "LA": "Laos",
     "LB": "Lebanon",
     "LT": "Lithuania",
     "LU": "Luxembourg",
@@ -66,6 +67,7 @@ COUNTRY_CODE_TO_NAME: dict[str, str] = {
     "MD": "Moldova",
     "ME": "Montenegro",
     "MK": "North Macedonia",
+    "MO": "Macau",
     "MX": "Mexico",
     "MY": "Malaysia",
     "NG": "Nigeria",
@@ -78,6 +80,7 @@ COUNTRY_CODE_TO_NAME: dict[str, str] = {
     "PH": "Philippines",
     "PK": "Pakistan",
     "PL": "Poland",
+    "PR": "Puerto Rico",
     "PT": "Portugal",
     "QA": "Qatar",
     "RO": "Romania",
@@ -92,6 +95,7 @@ COUNTRY_CODE_TO_NAME: dict[str, str] = {
     "TH": "Thailand",
     "TN": "Tunisia",
     "TR": "Turkey",
+    "TT": "Trinidad and Tobago",
     "TW": "Taiwan",
     "UA": "Ukraine",
     "US": "United States",
@@ -100,9 +104,12 @@ COUNTRY_CODE_TO_NAME: dict[str, str] = {
     "VN": "Vietnam",
     "XK": "Kosovo",
     "ZA": "South Africa",
+    # Catalog region (not ISO) — Latino package group-title "LA"
+    "LATAM": "Latin America",
 }
 
 # Extra aliases seen in playlist group-title values.
+# Checked before raw ISO 2-letter interpretation so "UK"→GB and "LA"→LATAM.
 _COUNTRY_ALIASES: dict[str, str] = {
     "bosnia": "BA",
     "czech": "CZ",
@@ -117,6 +124,9 @@ _COUNTRY_ALIASES: dict[str, str] = {
     "uk": "GB",
     "u.k.": "GB",
     "united kingdom": "GB",
+    "great britain": "GB",
+    "britain": "GB",
+    "england": "GB",
     "united": "GB",
     "usa": "US",
     "u.s.": "US",
@@ -136,6 +146,21 @@ _COUNTRY_ALIASES: dict[str, str] = {
     "greenland": "GL",
     "hong": "HK",
     "hong kong": "HK",
+    "saudi": "SA",
+    "saudi arabia": "SA",
+    "macau": "MO",
+    "macao": "MO",
+    "trinidad": "TT",
+    "trinidad and tobago": "TT",
+    "puerto rico": "PR",
+    "laos": "LA",
+    # Custom Latino pack uses group-title "LA" (not Laos).
+    "la": "LATAM",
+    "latam": "LATAM",
+    "latin america": "LATAM",
+    "latino": "LATAM",
+    "latinos": "LATAM",
+    "latin": "LATAM",
 }
 
 COUNTRY_NAME_TO_CODE: dict[str, str] = {
@@ -157,8 +182,13 @@ _NON_CATEGORY_GROUPS = frozenset(
         "vod",
         "country",
         "countries",
+        "region",
+        "regions",
     }
 )
+
+# Default category after peeling a country name out of group-title.
+DEFAULT_CATEGORY_AFTER_COUNTRY_SPLIT = "General"
 
 
 def country_code_to_name(code: Optional[str]) -> str:
@@ -171,19 +201,28 @@ def country_code_to_name(code: Optional[str]) -> str:
 
 
 def country_name_to_code(name: Optional[str]) -> Optional[str]:
+    """Map a label (name, alias, or ISO code) to a country/region code."""
     if not name:
         return None
     text = str(name).strip()
     if not text:
         return None
+
+    low = text.lower()
+    # Aliases first so UK/LA/PR-style playlist labels resolve correctly.
+    aliased = COUNTRY_NAME_TO_CODE.get(low)
+    if aliased:
+        return aliased
+
     if len(text) == 2 and text.isalpha():
         code = text.upper()
-        return code if code in COUNTRY_CODE_TO_NAME or code == "XK" else None
-    return COUNTRY_NAME_TO_CODE.get(text.lower())
+        if code in COUNTRY_CODE_TO_NAME or code == "XK":
+            return code
+    return None
 
 
 def is_country_like_group(label: Optional[str]) -> bool:
-    """True when a group-title is really a country (or empty placeholder)."""
+    """True when a group-title is really a country/region (or empty placeholder)."""
     if not label:
         return True
     text = str(label).strip()
@@ -198,7 +237,7 @@ def is_country_like_group(label: Optional[str]) -> bool:
 
 
 def resolve_country_code(channel: dict, source_url: Optional[str] = None) -> Optional[str]:
-    """Best-effort ISO country code from channel metadata / source URL."""
+    """Best-effort ISO/region country code from channel metadata / source URL."""
     if not isinstance(channel, dict):
         return None
 
@@ -208,15 +247,21 @@ def resolve_country_code(channel: dict, source_url: Optional[str] = None) -> Opt
             return "GB"
         if existing.upper() == "EL":
             return "GR"
-        if len(existing) == 2 and existing.isalpha():
-            return existing.upper()
+        # Prefer alias map (LATAM, etc.) then accept ISO 2-letter as-is.
         mapped = country_name_to_code(existing)
         if mapped:
             return mapped
+        if len(existing) == 2 and existing.isalpha():
+            return existing.upper()
+        if len(existing) <= 5 and existing.isalpha():
+            return existing.upper()
 
     tvg_id = (channel.get("tvg_id") or "").strip().lower()
     if "." in tvg_id:
         suffix = tvg_id.split(".")[-1]
+        mapped = country_name_to_code(suffix)
+        if mapped:
+            return mapped
         if len(suffix) == 2 and suffix.isalpha():
             return suffix.upper()
 
