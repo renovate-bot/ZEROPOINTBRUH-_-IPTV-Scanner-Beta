@@ -333,6 +333,44 @@ class ChannelStore:
         row = self._execute(sql, params).fetchone()
         return int(row[0]) if row else 0
 
+    def count_check_queue(
+        self,
+        statuses: Sequence[str],
+        *,
+        exclude_test: bool = True,
+    ) -> int:
+        """How many channels in ``statuses`` still sit in the check rotation."""
+        if not statuses:
+            return 0
+        placeholders = ",".join("?" for _ in statuses)
+        clauses = [f"status IN ({placeholders})"]
+        params: list = list(statuses)
+        if exclude_test:
+            clauses.append("(group_title IS NULL OR group_title != 'Test')")
+        sql = "SELECT COUNT(*) FROM channels WHERE " + " AND ".join(clauses)
+        row = self._execute(sql, params).fetchone()
+        return int(row[0]) if row else 0
+
+    def count_priority_checks(
+        self,
+        statuses: Optional[Sequence[str]] = None,
+        *,
+        exclude_test: bool = True,
+    ) -> int:
+        """Never-checked channels (``last_checked_at IS NULL``) — scan first."""
+        statuses = tuple(statuses or ACTIVE_STATUSES)
+        placeholders = ",".join("?" for _ in statuses)
+        clauses = [
+            f"status IN ({placeholders})",
+            "last_checked_at IS NULL",
+        ]
+        params: list = list(statuses)
+        if exclude_test:
+            clauses.append("(group_title IS NULL OR group_title != 'Test')")
+        sql = "SELECT COUNT(*) FROM channels WHERE " + " AND ".join(clauses)
+        row = self._execute(sql, params).fetchone()
+        return int(row[0]) if row else 0
+
     def list_channels(
         self,
         page: int = 1,
@@ -344,6 +382,7 @@ class ChannelStore:
         include_test: bool = False,
         media_type: Optional[str] = None,
         status: Optional[str] = None,
+        status_in: Optional[Sequence[str]] = None,
         sort: Optional[str] = None,
         sort_dir: str = "asc",
     ) -> dict:
@@ -387,6 +426,12 @@ class ChannelStore:
             params.extend([code, name])
         if online_only:
             clauses.append("status = 'online'")
+        elif status_in:
+            cleaned = [s for s in status_in if s]
+            if cleaned:
+                placeholders = ",".join("?" for _ in cleaned)
+                clauses.append(f"status IN ({placeholders})")
+                params.extend(cleaned)
         elif status:
             clauses.append("status = ?")
             params.append(status)
@@ -564,6 +609,26 @@ class ChannelStore:
     ) -> list:
         """Claim offline/error channels for the dead-revival worker."""
         return self.claim_check_batch(statuses or DEAD_STATUSES, limit)
+
+    def mark_priority_check(self, url: str) -> bool:
+        """Force ``url`` to the front of the health queue (unchecked-first).
+
+        Clears ``last_checked_at`` so :meth:`claim_check_batch` picks it up
+        before already-scanned rows. Used when a client reports a stream from
+        the unchecked/dead directory actually played.
+        """
+        url = (url or "").strip()
+        if not url:
+            return False
+        now = time.time()
+        cur = self._execute(
+            "UPDATE channels SET last_checked_at = NULL, updated_at = ? WHERE url = ?",
+            (now, url),
+        )
+        if cur.rowcount:
+            self.bump_revision()
+            return True
+        return False
 
     def update_channel_results(self, results: Sequence[dict]) -> int:
         """Batch-apply check results.

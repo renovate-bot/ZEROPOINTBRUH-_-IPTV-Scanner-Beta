@@ -41,6 +41,7 @@ from config import (
     STREAM_HEADERS,
     SWEEP_INTERVAL_SEC,
 )
+from features.storage.geo import resolve_country_code
 from features.icons.icons import download_channel_icon
 from features.ingest.ingest import channel_icon_safe_name, find_local_icon_url, infer_country
 from features.seo.seo import (
@@ -65,8 +66,9 @@ def seo_robots_txt():
     body = (
         "User-agent: *\n"
         "Allow: /\n"
+        "Allow: /streams.json\n"
+        "Allow: /api\n"
         "Disallow: /proxy/\n"
-        "Disallow: /api/\n"
         "Disallow: /export/\n"
         "Disallow: /admin/\n"
         f"\nSitemap: {base}/sitemap.xml\n"
@@ -266,6 +268,90 @@ def api_variants():
     except Exception as e:
         logging.error(f"variants api failed: {e}")
         return jsonify({'variants': [], 'error': str(e)})
+
+
+@app.route('/api/report-alive', methods=['POST'])
+def api_report_alive():
+    """Crowd-promote a channel after a client successfully plays it.
+
+    Dead / pending / unknown streams that load for a viewer are marked
+    ``online`` immediately so other users see them in the live list right away.
+    A background verify then confirms (or demotes) the stream.
+    """
+    try:
+        from features.storage.db import get_default_store
+
+        payload = request.get_json(silent=True) or {}
+        url = (payload.get('url') or request.form.get('url') or request.args.get('url') or '').strip()
+        if not url:
+            return jsonify({'ok': False, 'error': 'url required'}), 400
+
+        store = get_default_store()
+        existing = store.get_channel(url)
+        if not existing:
+            return jsonify({'ok': False, 'error': 'unknown channel'}), 404
+
+        prev = (existing.get('status') or '').lower()
+        promoted = prev != 'online'
+
+        store.update_channel_results([{
+            'url': url,
+            'status': 'online',
+            'fail_reason': None,
+            'fail_count': 0,
+            'playing_now': existing.get('playing_now') or 'Live',
+        }])
+        # Crowd-reported plays jump the health queue (unchecked-first).
+        try:
+            store.mark_priority_check(url)
+        except Exception:
+            logging.debug('mark_priority_check failed', exc_info=True)
+
+        def _bg_verify():
+            try:
+                async def _run():
+                    import aiohttp
+                    from features.validate.validate import validate_channel
+
+                    ch = store.get_channel(url)
+                    if not ch:
+                        return
+                    timeout = aiohttp.ClientTimeout(total=30)
+                    connector = aiohttp.TCPConnector(ssl=False, limit=4)
+                    async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
+                        channel, ok = await validate_channel(session, dict(ch))
+                    store.update_channel_results([{
+                        'url': url,
+                        'status': 'online' if ok else (channel.get('status') or 'offline'),
+                        'playing_now': channel.get('playing_now'),
+                        'fail_reason': None if ok else (channel.get('playing_now') or 'verify failed'),
+                        'fail_count': 0 if ok else 1,
+                    }])
+
+                asyncio.run(_run())
+            except Exception:
+                logging.debug('report-alive verify failed', exc_info=True)
+
+        threading.Thread(target=_bg_verify, daemon=True).start()
+
+        rev = store.get_revision()
+        state.CHANNEL_STATE_REVISION = rev
+        return jsonify({
+            'ok': True,
+            'promoted': promoted,
+            'previous_status': prev,
+            'status': 'online',
+            'priority_check_queued': True,
+            'revision': rev,
+            'message': (
+                'Marked online and queued for a priority health check.'
+                if promoted else
+                'Already online; re-queued for a priority health check.'
+            ),
+        })
+    except Exception as e:
+        logging.error('report-alive failed: %s', e)
+        return jsonify({'ok': False, 'error': str(e)}), 500
 
 
 @app.route('/status')
@@ -471,8 +557,11 @@ def get_channels():
         if request.args.get('videos', '0').lower() in ('1', 'true', 'yes'):
             media_type = 'vod'
         status = 'online' if online_only or not request.args.get('status') else request.args.get('status')
+        status_in = None
         if request.args.get('pending', '0').lower() in ('1', 'true', 'yes'):
-            status = 'pending'
+            # Pending toggle = dig through unchecked + dead so viewers can revive them.
+            status = None
+            status_in = ('pending', 'offline', 'error', 'unknown')
             media_type = None
         sort = (request.args.get('sort') or 'name').strip()
         sort_dir = (request.args.get('sort_dir') or 'asc').strip()
@@ -487,6 +576,7 @@ def get_channels():
             include_test=include_test,
             media_type=media_type if media_type not in ('', 'all') else None,
             status=status,
+            status_in=status_in,
             sort=sort,
             sort_dir=sort_dir,
         )
@@ -496,7 +586,13 @@ def get_channels():
             local_icon = find_local_icon_url(safe_name)
             if local_icon:
                 channel['icon_url'] = local_icon
-            channel['country'] = channel.get('country') or infer_country(channel)
+            # Prefer a real ISO code even when the DB still says GLOBAL
+            # (many playlists stuffed the country into group-title).
+            resolved = resolve_country_code(channel)
+            if resolved:
+                channel['country'] = resolved
+            else:
+                channel['country'] = channel.get('country') or infer_country(channel) or 'GLOBAL'
             # quality_count hint for UI
             try:
                 channel['quality_count'] = len(store.get_variants(channel.get('url') or ''))
@@ -511,6 +607,7 @@ def get_channels():
             'total_channels': result.get('total') or 0,
             'revision': state.CHANNEL_STATE_REVISION,
             'current_page': result.get('page') or page,
+            'per_page': limit,
             'has_more': bool(result.get('has_more')),
             'total_pages': result.get('total_pages') or 1,
         })
@@ -603,13 +700,21 @@ def download_all_icons():
                 icon_url = download_channel_icon(channel['name'], channel['url'], channel.get('tvg_logo', ''))
                 if icon_url:
                     downloaded += 1
-                    logging.info(f"✅ Downloaded icon for {channel['name']}")
+                    logging.debug("Downloaded icon for %s", channel['name'])
                 else:
                     failed += 1
-                    logging.info(f"❌ No icon found for {channel['name']}")
+                    logging.debug("No icon found for %s", channel['name'])
             except Exception as e:
                 failed += 1
-                logging.error(f"Error downloading icon for {channel['name']}: {e}")
+                logging.debug("Error downloading icon for %s: %s", channel['name'], e)
+
+        logging.info(
+            "[icons]\n[found] %s\n[reworking] %s\n[how many found] %s\n[how many not found] %s",
+            downloaded,
+            len(channels),
+            downloaded,
+            failed,
+        )
 
         return jsonify({
             'message': 'Icon download complete',
@@ -638,7 +743,7 @@ def search_channels():
 def get_youtube_stream_url(url):
     """Extract actual stream URL from YouTube using yt-dlp for reliable extraction."""
     try:
-        logging.info(f"Attempting to extract YouTube stream from URL: {url}")
+        logging.debug("youtube extract")
 
         ydl_opts = {
             'quiet': True,
@@ -654,7 +759,7 @@ def get_youtube_stream_url(url):
 
                 if info:
                     if info.get('is_live'):
-                        logging.info(f"Detected live stream: {info.get('title', 'Unknown')}")
+                        logging.debug("youtube extract")
                         formats = info.get('formats', [])
                         if formats:
                             best_format = None
@@ -665,7 +770,7 @@ def get_youtube_stream_url(url):
 
                             if best_format and best_format.get('url'):
                                 stream_url = best_format['url']
-                                logging.info(f"Extracted live stream URL: {stream_url}")
+                                logging.debug("youtube extract")
                                 return stream_url
                     else:
                         formats = info.get('formats', [])
@@ -678,18 +783,18 @@ def get_youtube_stream_url(url):
 
                             if best_format and best_format.get('url'):
                                 stream_url = best_format['url']
-                                logging.info(f"Extracted video stream URL: {stream_url}")
+                                logging.debug("youtube extract")
                                 return stream_url
 
                     # Fallback to embed URL if no direct stream found
                     video_id = info.get('id')
                     if video_id:
                         embed_url = f"https://www.youtube.com/embed/{video_id}?autoplay=1&rel=0"
-                        logging.info(f"Falling back to embed URL: {embed_url}")
+                        logging.debug("youtube extract")
                         return embed_url
 
         except Exception as e:
-            logging.warning(f"yt-dlp extraction failed: {e}")
+            logging.debug(f"yt-dlp extraction failed: {e}")
             return extract_youtube_url_basic(url)
 
     except ImportError:
@@ -704,39 +809,39 @@ def get_youtube_stream_url(url):
 def extract_youtube_url_basic(url):
     """Basic YouTube URL extraction as fallback."""
     try:
-        logging.info(f"Using basic YouTube extraction for: {url}")
+        logging.debug("youtube extract")
 
         video_id = None
 
         if 'youtube.com/watch?v=' in url:
             video_id = url.split('v=')[1].split('&')[0]
-            logging.info(f"Extracted video ID using pattern 1: {video_id}")
+            logging.debug("youtube extract")
         elif 'youtu.be/' in url:
             video_id = url.split('youtu.be/')[1].split('?')[0]
-            logging.info(f"Extracted video ID using pattern 2: {video_id}")
+            logging.debug("youtube extract")
         elif 'youtube.com/embed/' in url:
             video_id = url.split('embed/')[1].split('?')[0]
-            logging.info(f"Extracted video ID using pattern 3: {video_id}")
+            logging.debug("youtube extract")
         elif '/live' in url:
-            logging.info(f"Detected YouTube live stream URL: {url}")
+            logging.debug("youtube extract")
             if '/@' in url:
                 channel_handle = url.split('/@')[1].split('/')[0]
-                logging.info(f"Extracted channel handle: {channel_handle}")
+                logging.debug("youtube extract")
                 return f"https://www.youtube.com/embed/live_stream?channel={channel_handle}"
             elif '/channel/' in url:
                 channel_id = url.split('/channel/')[1].split('/')[0]
-                logging.info(f"Extracted channel ID: {channel_id}")
+                logging.debug("youtube extract")
                 return f"https://www.youtube.com/embed/live_stream?channel={channel_id}"
             elif '/c/' in url:
                 channel_name = url.split('/c/')[1].split('/')[0]
-                logging.info(f"Extracted channel name: {channel_name}")
+                logging.debug("youtube extract")
                 return f"https://www.youtube.com/embed/live_stream?channel={channel_name}"
             elif '/user/' in url:
                 username = url.split('/user/')[1].split('/')[0]
-                logging.info(f"Extracted username: {username}")
+                logging.debug("youtube extract")
                 return f"https://www.youtube.com/embed/live_stream?channel={username}"
             else:
-                logging.warning(f"Unknown live stream format: {url}")
+                logging.debug(f"Unknown live stream format: {url}")
                 return None
         else:
             # Try to extract video ID using regex
@@ -748,21 +853,21 @@ def extract_youtube_url_basic(url):
                 match = re.search(pattern, url)
                 if match:
                     video_id = match.group(1)
-                    logging.info(f"Extracted video ID using regex pattern {i+1}: {video_id}")
+                    logging.debug("youtube extract")
                     break
 
         if video_id:
             if len(video_id) != 11:
-                logging.warning(f"Invalid video ID format: {video_id} (length: {len(video_id)})")
+                logging.debug(f"Invalid video ID format: {video_id} (length: {len(video_id)})")
                 return None
 
-            logging.info(f"Valid video ID extracted: {video_id}")
+            logging.debug("youtube extract")
 
             embed_url = f"https://www.youtube.com/embed/{video_id}?autoplay=1&rel=0"
-            logging.info(f"Generated embed URL: {embed_url}")
+            logging.debug("youtube extract")
             return embed_url
         else:
-            logging.warning(f"Could not extract video ID from URL: {url}")
+            logging.debug(f"Could not extract video ID from URL: {url}")
             logging.warning("URL patterns checked: youtube.com/watch?v=, youtu.be/, youtube.com/embed/, /live, regex patterns")
             return None
 
@@ -849,34 +954,38 @@ def proxy_stream():
             logging.error("No URL provided to proxy/stream endpoint")
             return jsonify({'error': 'No URL provided'}), 400
 
-        logging.info(f"Proxy stream request for URL: {stream_url}")
-        logging.info(f"URL type check - YouTube: {'youtube.com' in stream_url or 'youtu.be' in stream_url}, Twitch: {'twitch.tv' in stream_url}")
+        logging.debug("Proxy stream request for URL: %s", stream_url)
+        logging.debug(
+            "URL type check - YouTube: %s, Twitch: %s",
+            "youtube.com" in stream_url or "youtu.be" in stream_url,
+            "twitch.tv" in stream_url,
+        )
 
         # YouTube handling
         if 'youtube.com' in stream_url or 'youtu.be' in stream_url:
-            logging.info(f"Processing YouTube URL: {stream_url}")
+            logging.debug("Processing YouTube URL: %s", stream_url)
             direct_url = get_youtube_stream_url(stream_url)
             if direct_url:
-                logging.info(f"YouTube extraction successful, redirecting to: {direct_url}")
+                logging.debug("YouTube extraction successful, redirecting")
                 return redirect(direct_url, code=302)
             else:
-                logging.error(f"YouTube extraction failed for URL: {stream_url}")
+                logging.debug("YouTube extraction failed for URL: %s", stream_url)
                 return jsonify({'error': 'Failed to extract YouTube stream'}), 500
 
         # Twitch handling
         elif 'twitch.tv' in stream_url:
-            logging.info(f"Processing Twitch URL: {stream_url}")
+            logging.debug("Processing Twitch URL: %s", stream_url)
             direct_url = get_twitch_stream_url(stream_url)
             if direct_url:
-                logging.info(f"Twitch extraction successful, redirecting to: {direct_url}")
+                logging.debug("Twitch extraction successful, redirecting")
                 return redirect(direct_url, code=302)
             else:
-                logging.error(f"Twitch extraction failed for URL: {stream_url}")
+                logging.debug("Twitch extraction failed for URL: %s", stream_url)
                 return jsonify({'error': 'Failed to extract Twitch stream'}), 500
 
         # Direct stream for other sources
         else:
-            logging.info(f"Processing direct stream URL: {stream_url}")
+            logging.debug("Processing direct stream URL")
             return proxy_direct_stream(stream_url)
 
     except Exception as e:

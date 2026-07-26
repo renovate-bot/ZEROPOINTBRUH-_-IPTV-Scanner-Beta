@@ -6,7 +6,6 @@
 
     const PAGE_SIZE = 50;
     const FAVORITES_STORAGE_KEY = 'iptv_scanner_favorites_v1';
-    const INFINITE_SCROLL_THRESHOLD_PX = 320;
     const SEARCH_DEBOUNCE_MS = 320;
 
     const $ = (id) => document.getElementById(id);
@@ -19,6 +18,26 @@
             .replace(/>/g, '&gt;')
             .replace(/"/g, '&quot;')
             .replace(/'/g, '&#39;');
+    }
+
+    /** ISO 3166-1 alpha-2 → regional-indicator flag emoji (e.g. US → 🇺🇸). */
+    function countryFlagEmoji(code) {
+        if (!code) return '🌐';
+        let c = String(code).trim().toUpperCase();
+        if (c === 'UK') c = 'GB';
+        if (c === 'EL') c = 'GR';
+        if (!c || c === 'XX' || c === 'ZZ' || c === 'GLOBAL' || c === 'UNKNOWN' || c === 'UNDEFINED') {
+            return '🌐';
+        }
+        if (!/^[A-Z]{2}$/.test(c)) return '🌐';
+        const A = 0x1f1e6;
+        return String.fromCodePoint(A + (c.charCodeAt(0) - 65), A + (c.charCodeAt(1) - 65));
+    }
+
+    function channelTitleWithFlag(channel) {
+        const name = (channel && channel.name) || 'Untitled channel';
+        const flag = countryFlagEmoji(channel && channel.country);
+        return `${flag} ${name}`;
     }
 
     function debounce(fn, ms) {
@@ -44,6 +63,7 @@
             this.channels = [];
             this.channelIndex = new Map(); // url -> channel
             this.currentPage = 0;
+            this.totalPages = 1;
             this.hasMore = true;
             this.totalChannels = 0;
             this.isFetching = false;
@@ -65,12 +85,13 @@
 
             this.favorites = this._loadFavorites();
 
-            this._boundOnListScroll = this._onListScroll.bind(this);
-            this._boundOnWindowScroll = this._onWindowScroll.bind(this);
             this._channelMenu = null;
             this._channelMenuChannel = null;
             this._channelMenuTrigger = null;
             this._boundCloseChannelMenu = this._closeChannelMenu.bind(this);
+            this._aliveReported = new Set();
+            this._filterSheetKind = null;
+            this._filterSheetOptions = [];
         }
 
         // ------------------------- init -----------------------------------
@@ -82,7 +103,8 @@
             this._setupMoreToggles();
             this._setupPlayerControls();
             this._setupChannelMenu();
-            this._setupInfiniteScroll();
+            this._setupFilterSheet();
+            this._setupPager();
             this._setupEmptyState();
             this._connectEventStream();
             this._fetchStatus();
@@ -205,19 +227,9 @@
 
         // ------------------------- filters --------------------------------
         _setupFilters() {
-            const group = $('groupFilter');
-            const country = $('countryFilter');
             const sort = $('sortFilter');
             const dir = $('sortDir');
 
-            group?.addEventListener('change', () => {
-                this.group = group.value;
-                this.reload({ resetScroll: true });
-            });
-            country?.addEventListener('change', () => {
-                this.country = country.value;
-                this.reload({ resetScroll: true });
-            });
             sort?.addEventListener('change', () => {
                 this.sort = sort.value;
                 this.reload({ resetScroll: true });
@@ -226,6 +238,134 @@
                 this.sortDir = dir.value;
                 this.reload({ resetScroll: true });
             });
+
+            $('groupFilterBtn')?.addEventListener('click', () => this._openFilterSheet('group'));
+            $('countryFilterBtn')?.addEventListener('click', () => this._openFilterSheet('country'));
+            this._syncFilterLabels();
+        }
+
+        _setupFilterSheet() {
+            const sheet = $('filterSheet');
+            if (!sheet) return;
+            sheet.querySelectorAll('[data-sheet-dismiss]').forEach((el) => {
+                el.addEventListener('click', () => this._closeFilterSheet());
+            });
+            const search = $('filterSheetSearch');
+            search?.addEventListener('input', () => this._renderFilterSheetList(search.value));
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape' && sheet && !sheet.classList.contains('hidden')) {
+                    this._closeFilterSheet();
+                }
+            });
+        }
+
+        _syncFilterLabels() {
+            const gLab = $('groupFilterLabel');
+            const cLab = $('countryFilterLabel');
+            const g = $('groupFilter');
+            const c = $('countryFilter');
+            if (g) g.value = this.group || '';
+            if (c) c.value = this.country || '';
+            if (gLab) {
+                const opt = g?.selectedOptions?.[0];
+                gLab.textContent = opt?.textContent || this.group || 'All categories';
+            }
+            if (cLab) {
+                if (!this.country) {
+                    cLab.textContent = 'All countries';
+                } else {
+                    const opt = c?.selectedOptions?.[0];
+                    const name = opt?.textContent || this.country;
+                    cLab.textContent = `${countryFlagEmoji(this.country)} ${name}`;
+                }
+            }
+        }
+
+        _openFilterSheet(kind) {
+            const sheet = $('filterSheet');
+            const title = $('filterSheetTitle');
+            const search = $('filterSheetSearch');
+            if (!sheet) return;
+            this._filterSheetKind = kind;
+            if (title) title.textContent = kind === 'country' ? 'Country' : 'Category';
+            if (search) search.value = '';
+
+            const sel = $(kind === 'country' ? 'countryFilter' : 'groupFilter');
+            const options = [];
+            if (sel) {
+                Array.from(sel.options).forEach((opt) => {
+                    options.push({ value: opt.value, label: opt.textContent || opt.value });
+                });
+            }
+            this._filterSheetOptions = options;
+            this._renderFilterSheetList('');
+            sheet.classList.remove('hidden');
+            sheet.setAttribute('aria-hidden', 'false');
+            document.body.classList.add('overflow-hidden');
+            setTimeout(() => search?.focus(), 50);
+        }
+
+        _closeFilterSheet() {
+            const sheet = $('filterSheet');
+            if (!sheet) return;
+            sheet.classList.add('hidden');
+            sheet.setAttribute('aria-hidden', 'true');
+            document.body.classList.remove('overflow-hidden');
+            this._filterSheetKind = null;
+        }
+
+        _renderFilterSheetList(query) {
+            const list = $('filterSheetList');
+            if (!list) return;
+            const q = String(query || '').trim().toLowerCase();
+            const current =
+                this._filterSheetKind === 'country' ? this.country || '' : this.group || '';
+            const opts = this._filterSheetOptions.filter((o) => {
+                if (!q) return true;
+                return (
+                    String(o.label || '').toLowerCase().includes(q) ||
+                    String(o.value || '').toLowerCase().includes(q)
+                );
+            });
+            list.innerHTML = '';
+            if (!opts.length) {
+                list.innerHTML =
+                    '<p class="text-sm text-slate-400 text-center py-8">No matches</p>';
+                return;
+            }
+            const frag = document.createDocumentFragment();
+            for (const o of opts) {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                const selected = o.value === current;
+                btn.className = [
+                    'w-full min-h-[48px] rounded-xl px-3 py-3 text-left text-sm flex items-center justify-between gap-2',
+                    selected
+                        ? 'bg-brand-400/15 text-brand-100 ring-1 ring-brand-400/40'
+                        : 'hover:bg-white/5 text-slate-100',
+                ].join(' ');
+                const label =
+                    this._filterSheetKind === 'country' && o.value
+                        ? `${countryFlagEmoji(o.value)} ${o.label}`
+                        : o.label;
+                btn.innerHTML = `<span class="truncate">${escapeHtml(label)}</span>${
+                    selected
+                        ? '<svg viewBox="0 0 24 24" class="h-5 w-5 shrink-0 text-brand-300" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12l5 5L20 7"/></svg>'
+                        : ''
+                }`;
+                btn.addEventListener('click', () => {
+                    if (this._filterSheetKind === 'country') {
+                        this.country = o.value;
+                    } else {
+                        this.group = o.value;
+                    }
+                    this._syncFilterLabels();
+                    this._closeFilterSheet();
+                    this.reload({ resetScroll: true });
+                });
+                frag.appendChild(btn);
+            }
+            list.appendChild(frag);
         }
 
         _setupMoreToggles() {
@@ -253,6 +393,7 @@
                 if (s) s.value = '';
                 if (g) g.value = '';
                 if (c) c.value = '';
+                this._syncFilterLabels();
                 this._syncModeTabs();
                 this.reload({ resetScroll: true });
             });
@@ -360,9 +501,33 @@
             const progressive = /\.(mp4|webm|ogv|mp3|aac|m4a|ogg|wav)$/i.test(path);
             const audioFile = /\.(mp3|aac|m4a|ogg|wav)$/i.test(path);
 
+            // Decide audio-only from real video dimensions after playback starts —
+            // HLS.js often omits videoCodec/height at MANIFEST_PARSED (false positives).
+            const watchDimensions = () => {
+                const reveal = () => {
+                    if (!video.isConnected) return;
+                    if (video.videoWidth > 0 && video.videoHeight > 0) {
+                        this._setAudioOnlyUi(false);
+                        this._maybeReportAlive();
+                        return;
+                    }
+                    if (!video.paused && video.currentTime > 0.25 && video.videoWidth === 0) {
+                        this._setAudioOnlyUi(true);
+                        this._maybeReportAlive();
+                    }
+                };
+                video.addEventListener('loadeddata', reveal);
+                video.addEventListener('playing', () => {
+                    this._maybeReportAlive();
+                    setTimeout(reveal, 400);
+                });
+                video.addEventListener('resize', reveal);
+            };
+
             if (progressive) {
                 video.src = playUrl;
                 if (audioFile) this._setAudioOnlyUi(true);
+                else watchDimensions();
                 return;
             }
 
@@ -373,8 +538,6 @@
                     lowLatencyMode: false,
                     maxBufferLength: 30,
                     backBufferLength: 30,
-                    // Keep playlist/segment requests on our same-origin proxy;
-                    // do not let the browser hit raw http:// upstreams.
                     xhrSetup: (xhr) => {
                         try {
                             xhr.withCredentials = false;
@@ -390,9 +553,6 @@
                     if (data?.levels?.length) {
                         this._populateHlsQualityLevels(data.levels);
                     }
-                    if (this._isAudioOnlyManifest(data)) {
-                        this._setAudioOnlyUi(true);
-                    }
                 });
                 hls.on(Hls.Events.ERROR, (_, data) => {
                     if (!data?.fatal) return;
@@ -404,6 +564,7 @@
                         this.notify('This stream stopped — try another channel', 'error');
                     }
                 });
+                watchDimensions();
                 return;
             }
 
@@ -413,22 +574,12 @@
                 video.canPlayType('application/x-mpegURL')
             ) {
                 video.src = playUrl;
+                watchDimensions();
                 return;
             }
 
             video.src = playUrl;
-        }
-
-        _isAudioOnlyManifest(data) {
-            const levels = Array.isArray(data?.levels) ? data.levels : [];
-            if (levels.length) {
-                return levels.every((lvl) => {
-                    const height = Number(lvl?.height || 0);
-                    const hasVideo = Boolean(lvl?.videoCodec) || height > 0;
-                    return !hasVideo;
-                });
-            }
-            return Array.isArray(data?.audioTracks) && data.audioTracks.length > 0;
+            watchDimensions();
         }
 
         _setAudioOnlyUi(on) {
@@ -518,7 +669,7 @@
             if (channel.group_title) parts.push(channel.group_title);
             if (channel.country) parts.push(channel.country);
             const meta = parts.join(' · ') || nowLine;
-            if (nm) nm.textContent = channel.name || 'Untitled channel';
+            if (nm) nm.textContent = channelTitleWithFlag(channel);
             if (inf) inf.textContent = meta;
 
             this._playStream(channel.url, channel.name || '');
@@ -537,6 +688,52 @@
             });
 
             this.notify(`Now playing: ${channel.name || 'stream'}`);
+        }
+
+        _maybeReportAlive() {
+            const ch = this.currentChannel;
+            if (!ch?.url) return;
+            const status = String(ch.status || '').toLowerCase();
+            // Already live in catalog — nothing to promote.
+            if (status === 'online') return;
+            if (this._aliveReported.has(ch.url)) return;
+            this._aliveReported.add(ch.url);
+
+            fetch('/api/report-alive', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url: ch.url }),
+            })
+                .then((r) => r.json())
+                .then((data) => {
+                    if (!data?.ok) return;
+                    ch.status = 'online';
+                    if (data.promoted) {
+                        this.notify('Stream verified — now listed as live for everyone');
+                    }
+                    // Update the card status chip in place.
+                    const card = document.querySelector(
+                        `.channel-card[data-channel-url="${CSS.escape(ch.url)}"]`
+                    );
+                    if (card) {
+                        const chip = card.querySelector('.mt-0\\.5 span span.h-1\\.5');
+                        // fallback: re-render is heavier; patch text if present
+                        const statusRow = card.querySelector('.mt-0\\.5');
+                        if (statusRow) {
+                            const label = statusRow.querySelector('span.inline-flex');
+                            if (label) {
+                                label.innerHTML =
+                                    '<span class="h-1.5 w-1.5 rounded-full bg-emerald-400"></span> Live now';
+                            }
+                        }
+                    }
+                    if (typeof data.revision === 'number') {
+                        this.lastRevision = data.revision;
+                    }
+                })
+                .catch(() => {
+                    this._aliveReported.delete(ch.url);
+                });
         }
 
         // ------------------------- fetching -------------------------------
@@ -563,6 +760,7 @@
         async reload(opts = {}) {
             const resetScroll = opts.resetScroll !== false;
             this.currentPage = 0;
+            this.totalPages = 1;
             this.hasMore = true;
             this.channels = [];
             this.channelIndex.clear();
@@ -578,21 +776,102 @@
                 if (resetScroll) list.scrollTop = 0;
             }
             this._hideEmpty();
+            this._updatePager();
 
-            await this._fetchNextPage({ replace: true });
+            await this._loadPage(1, { replace: true, resetScroll });
         }
 
-        async _fetchNextPage(opts = {}) {
-            if (this.isFetching || !this.hasMore) return;
+        /**
+         * Background refresh when the catalog revision changes.
+         * Stays on the current page, keeps scroll position, does not touch the player.
+         */
+        async _softRefresh() {
+            if (this.isFetching) {
+                this._scheduleQuietReload();
+                return;
+            }
+            const page = Math.max(1, this.currentPage || 1);
+            const listEl = $('channelsList');
+            const savedListScroll = listEl ? listEl.scrollTop : 0;
+            const savedWinScroll = window.scrollY || document.documentElement.scrollTop || 0;
+            const prevSig = this.channels
+                .map((c) => `${c.url}\0${c.status || ''}\0${c.name || ''}`)
+                .join('\n');
+
             this.isFetching = true;
             try {
-                const nextPage = this.currentPage + 1;
-                const url = `/channels?${this._buildQuery(nextPage)}`;
+                const res = await fetch(`/channels?${this._buildQuery(page)}`);
+                const data = await res.json();
+                let payload = Array.isArray(data.channels) ? data.channels : [];
+                if (this.mode === 'favorites') {
+                    payload = payload.filter((c) => this.favorites.has(c.url));
+                }
+
+                this.currentPage = data.current_page || page;
+                this.totalPages = Math.max(1, Number(data.total_pages) || 1);
+                this.hasMore = Boolean(data.has_more);
+                this.totalChannels = Number(data.total_channels || 0);
+                if (typeof data.revision === 'number') {
+                    this.lastRevision = data.revision;
+                }
+
+                // Catalog shrank — quietly clamp to last page without a hard jump flash.
+                if (this.currentPage > this.totalPages) {
+                    this.isFetching = false;
+                    await this._loadPage(this.totalPages, { resetScroll: false });
+                    return;
+                }
+
+                this.channels = [];
+                this.channelIndex.clear();
+                for (const ch of payload) {
+                    if (ch?.url && !this.channelIndex.has(ch.url)) {
+                        this.channelIndex.set(ch.url, ch);
+                        this.channels.push(ch);
+                    }
+                }
+
+                this._populateFilterOptions(data);
+
+                const nextSig = this.channels
+                    .map((c) => `${c.url}\0${c.status || ''}\0${c.name || ''}`)
+                    .join('\n');
+
+                if (nextSig !== prevSig) {
+                    this._renderList();
+                    if (listEl) listEl.scrollTop = savedListScroll;
+                    window.scrollTo(0, savedWinScroll);
+                }
+
+                this._updateVisibleCount();
+                this._updatePager();
+
+                if (!this.channels.length) {
+                    this._showEmpty();
+                } else {
+                    this._hideEmpty();
+                }
+            } catch (err) {
+                console.error('Soft refresh failed:', err);
+            } finally {
+                this.isFetching = false;
+                this._updatePager();
+            }
+        }
+
+        async _loadPage(page, opts = {}) {
+            if (this.isFetching) return;
+            const target = Math.max(1, Number(page) || 1);
+            const resetScroll = opts.resetScroll !== false;
+            this.isFetching = true;
+            try {
+                const url = `/channels?${this._buildQuery(target)}`;
                 const res = await fetch(url);
                 const data = await res.json();
 
                 const list = Array.isArray(data.channels) ? data.channels : [];
-                this.currentPage = data.current_page || nextPage;
+                this.currentPage = data.current_page || target;
+                this.totalPages = Math.max(1, Number(data.total_pages) || 1);
                 this.hasMore = Boolean(data.has_more);
                 this.totalChannels = Number(data.total_channels || 0);
 
@@ -606,11 +885,8 @@
                     payload = list.filter((c) => this.favorites.has(c.url));
                 }
 
-                if (opts.replace) {
-                    this.channels = [];
-                    this.channelIndex.clear();
-                }
-
+                this.channels = [];
+                this.channelIndex.clear();
                 for (const ch of payload) {
                     if (ch?.url && !this.channelIndex.has(ch.url)) {
                         this.channelIndex.set(ch.url, ch);
@@ -619,31 +895,22 @@
                 }
 
                 this._populateFilterOptions(data);
-
-                if (opts.replace) {
-                    this._renderList();
-                } else {
-                    this._appendCards(payload);
-                }
-
-                // Auto-fetch more if this page collapsed to nothing in favorites mode.
-                if (
-                    this.mode === 'favorites' &&
-                    this.hasMore &&
-                    payload.length === 0 &&
-                    this.currentPage < 50
-                ) {
-                    this.isFetching = false;
-                    await this._fetchNextPage();
-                    return;
-                }
-
+                this._renderList();
                 this._updateVisibleCount();
+                this._updatePager();
 
                 if (!this.channels.length) {
                     this._showEmpty();
                 } else {
                     this._hideEmpty();
+                }
+
+                if (resetScroll) {
+                    const el = $('channelsList');
+                    if (el) el.scrollTop = 0;
+                    if (typeof window !== 'undefined' && window.matchMedia('(max-width: 1023px)').matches) {
+                        el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+                    }
                 }
             } catch (err) {
                 console.error('Load failed:', err);
@@ -652,6 +919,7 @@
                 this.isFetching = false;
                 const list = $('channelsList');
                 if (list) list.removeAttribute('aria-busy');
+                this._updatePager();
             }
         }
 
@@ -729,6 +997,7 @@
 
             fillGroups(g, groups, 'All categories', this.group);
             fillCountries(c, countries, 'All countries', this.country);
+            this._syncFilterLabels();
         }
 
         // ------------------------- rendering ------------------------------
@@ -782,10 +1051,13 @@
             const initial = name.trim().charAt(0).toUpperCase() || '?';
             const group = channel.group_title || '';
             const country = channel.country || '';
+            const flag = countryFlagEmoji(country);
             const nowLine =
                 channel.playing_now && String(channel.playing_now).trim()
                     ? channel.playing_now
-                    : [group, country].filter(Boolean).join(' · ') || 'Live stream';
+                    : [group, country && country !== 'GLOBAL' ? country : '']
+                          .filter(Boolean)
+                          .join(' · ') || 'Live stream';
 
             const status = String(channel.status || 'unknown').toLowerCase();
             const statusMap = {
@@ -823,8 +1095,8 @@
                 <div class="flex items-center gap-3 min-w-0">
                     <div class="shrink-0">${logoHtml}</div>
                     <div class="min-w-0 flex-1">
-                        <div class="flex items-center gap-2">
-                            <h4 class="font-display font-semibold text-slate-100 truncate">${escapeHtml(name)}</h4>
+                        <div class="flex items-center gap-2 min-w-0">
+                            <h4 class="font-display font-semibold text-slate-100 truncate"><span class="mr-1" aria-hidden="true">${flag}</span>${escapeHtml(name)}</h4>
                             ${quality}
                         </div>
                         <div class="mt-0.5 flex items-center gap-2 text-xs text-slate-400 min-w-0">
@@ -1010,29 +1282,26 @@
             if (label) label.textContent = isFav ? 'Remove from My list' : 'Add to My list';
         }
 
-        // ------------------------- infinite scroll ------------------------
-        _setupInfiniteScroll() {
-            const list = $('channelsList');
-            list?.addEventListener('scroll', this._boundOnListScroll, { passive: true });
-            window.addEventListener('scroll', this._boundOnWindowScroll, { passive: true });
+        // ------------------------- page controls --------------------------
+        _setupPager() {
+            $('pagePrevBtn')?.addEventListener('click', () => {
+                if (this.currentPage > 1) this._loadPage(this.currentPage - 1);
+            });
+            $('pageNextBtn')?.addEventListener('click', () => {
+                if (this.currentPage < this.totalPages) this._loadPage(this.currentPage + 1);
+            });
+            this._updatePager();
         }
 
-        _onListScroll(e) {
-            const el = e.target;
-            if (!el) return;
-            const nearBottom =
-                el.scrollTop + el.clientHeight >= el.scrollHeight - INFINITE_SCROLL_THRESHOLD_PX;
-            if (nearBottom) this._fetchNextPage();
-        }
-
-        _onWindowScroll() {
-            // On mobile the list is not itself scrollable; the page scrolls.
-            const isDesktop = window.matchMedia('(min-width: 1024px)').matches;
-            if (isDesktop) return;
-            const nearBottom =
-                window.innerHeight + window.scrollY >=
-                document.documentElement.scrollHeight - INFINITE_SCROLL_THRESHOLD_PX;
-            if (nearBottom) this._fetchNextPage();
+        _updatePager() {
+            const prev = $('pagePrevBtn');
+            const next = $('pageNextBtn');
+            const label = $('pageLabel');
+            const page = Math.max(1, this.currentPage || 1);
+            const total = Math.max(1, this.totalPages || 1);
+            if (label) label.textContent = `Page ${page} of ${total}`;
+            if (prev) prev.disabled = page <= 1 || this.isFetching;
+            if (next) next.disabled = page >= total || this.isFetching;
         }
 
         // ------------------------- status + events ------------------------
@@ -1088,8 +1357,8 @@
         _scheduleQuietReload() {
             clearTimeout(this.pendingReloadTimer);
             this.pendingReloadTimer = setTimeout(() => {
-                this.reload({ resetScroll: false });
-            }, 1500);
+                this._softRefresh();
+            }, 2000);
         }
 
         _applyStatus(d) {
@@ -1116,13 +1385,12 @@
             const el = $('visibleCount');
             if (!el) return;
             const shown = this.channels.length;
+            const page = Math.max(1, this.currentPage || 1);
             const total = this.totalChannels || shown;
             if (this.mode === 'favorites') {
-                el.textContent = String(shown);
-            } else if (shown < total) {
-                el.textContent = `${shown} of ${total}`;
+                el.textContent = `${shown} on page ${page}`;
             } else {
-                el.textContent = String(total);
+                el.textContent = `${shown} on page ${page} · ${total} total`;
             }
         }
 

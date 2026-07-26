@@ -204,6 +204,10 @@ def resolve_country_code(channel: dict, source_url: Optional[str] = None) -> Opt
 
     existing = (channel.get("country") or "").strip()
     if existing and existing.upper() not in ("GLOBAL", "XX", "ZZ", "UNKNOWN", "UNDEFINED"):
+        if existing.upper() == "UK":
+            return "GB"
+        if existing.upper() == "EL":
+            return "GR"
         if len(existing) == 2 and existing.isalpha():
             return existing.upper()
         mapped = country_name_to_code(existing)

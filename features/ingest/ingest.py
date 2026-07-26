@@ -74,10 +74,10 @@ def check_channels(m3u_url):
 
             return channels
         else:
-            logging.error(f"Failed to fetch M3U playlist: {response.status_code}")
+            logging.debug("Failed to fetch M3U playlist")
             return []
     except Exception as e:
-        logging.error(f"Error parsing M3U playlist: {e}")
+        logging.debug("Error parsing M3U playlist: %s", e)
         return []
 
 
@@ -277,15 +277,13 @@ def check_all_global_sources():
     seen_urls = set()
     source_stats = {}
 
-    logging.info("Starting COMPLETE global source aggregation...")
     logging.info(
-        "Per-stream ingest expansion is %s (IPTV_EXPAND_ON_INGEST=%r to change)",
-        "ON" if EXPAND_ON_INGEST else "OFF",
-        os.environ.get("IPTV_EXPAND_ON_INGEST", "0"),
+        "[ingest]\n[reworking] starting aggregation\n[Priority checks scans] expand=%s",
+        "on" if EXPAND_ON_INGEST else "off",
     )
 
     # Add direct sources (verified + FAST/public)
-    logging.info("Adding direct source pack (verified + FAST/public)...")
+    logging.debug("Adding direct source pack...")
     all_direct_sources = ALL_DIRECT_SOURCES
 
     for name, url, group in all_direct_sources:
@@ -303,7 +301,7 @@ def check_all_global_sources():
             all_channels.append(channel)
             seen_urls.add(url)
 
-    logging.info(f"Added {len(all_direct_sources)} direct channels")
+    logging.debug("Added %s direct channels", len(all_direct_sources))
 
     # Process all M3U sources
     all_m3u_sources = [GLOBAL_SOURCES["main"]]
@@ -321,12 +319,12 @@ def check_all_global_sources():
     # Add externally configured M3U sources (e.g. Jellyfin/FastChannels output URLs)
     all_m3u_sources.extend(get_extra_m3u_sources())
 
-    logging.info(f"Processing {len(all_m3u_sources)} M3U sources...")
+    logging.debug("Processing %s M3U sources...", len(all_m3u_sources))
 
     # Process each M3U source
     for i, source_url in enumerate(all_m3u_sources):
         try:
-            logging.info(f"Processing source {i+1}/{len(all_m3u_sources)}: {source_url}")
+            logging.debug("Processing source %s/%s: %s", i + 1, len(all_m3u_sources), source_url)
 
             response = requests.get(source_url, timeout=30, headers=HEADERS)
             if response.status_code == 200:
@@ -405,14 +403,14 @@ def check_all_global_sources():
                 # Add source channels to main list
                 all_channels.extend(source_channels)
                 source_stats[source_url] = len(source_channels)
-                logging.info(f"Added {len(source_channels)} channels from {source_url}")
+                logging.debug("Added %s channels from %s", len(source_channels), source_url)
 
             else:
-                logging.warning(f"Failed to fetch source {source_url}: {response.status_code}")
+                logging.debug("Failed to fetch source %s: %s", source_url, response.status_code)
                 source_stats[source_url] = 0
 
         except Exception as e:
-            logging.error(f"Error processing source {source_url}: {e}")
+            logging.debug("Error processing source %s: %s", source_url, e)
             source_stats[source_url] = 0
 
     # Add exception channels
@@ -422,14 +420,18 @@ def check_all_global_sources():
             seen_urls.add(channel['url'])
 
     # Log comprehensive statistics
-    logging.info("COMPLETE global source aggregation finished!")
-    logging.info(f"Total unique channels: {len(all_channels)}")
-    logging.info(f"Direct sources: {len(all_direct_sources)}")
-    logging.info(f"M3U sources: {len(all_m3u_sources)}")
-    logging.info("Source breakdown:")
+    logging.info(
+        "[ingest]\n[found] %s\n[reworking] %s sources\n[how many found] %s\n[how many not found] 0",
+        len(all_channels),
+        len(all_m3u_sources),
+        len(all_channels),
+    )
+    logging.debug("Direct sources: %s", len(all_direct_sources))
+    logging.debug("M3U sources: %s", len(all_m3u_sources))
+    logging.debug("Source breakdown:")
     for source, count in source_stats.items():
         if count > 0:
-            logging.info(f"  {source}: {count} channels")
+            logging.debug("  %s: %s channels", source, count)
 
     # Log category statistics
     category_counts = {}
@@ -437,9 +439,9 @@ def check_all_global_sources():
         group = channel.get('group_title', 'Unknown')
         category_counts[group] = category_counts.get(group, 0) + 1
 
-    logging.info("Category breakdown:")
+    logging.debug("Category breakdown:")
     for category, count in sorted(category_counts.items()):
-        logging.info(f"  {category}: {count} channels")
+        logging.debug("  %s: %s channels", category, count)
 
     return all_channels
 
@@ -454,7 +456,7 @@ def process_stream_url(url):
             # For direct streams, check for redirects
             return check_redirect_chain(url)
     except Exception as e:
-        logging.warning(f"Error processing stream URL {url}: {e}")
+        logging.debug(f"Error processing stream URL {url}: {e}")
         return url
 
 
@@ -501,16 +503,16 @@ def process_m3u8_playlist(playlist_url):
 
                 # Log all variants for debugging
                 for i, variant in enumerate(variants):
-                    logging.info(f"Quality variant {i+1}: {variant['resolution']} ({variant['bandwidth']} bps)")
+                    logging.debug("Quality variant %s", i + 1)
 
                 # Return the highest quality variant
                 best_variant = variants[0]
-                logging.info(f"Selected best quality: {best_variant['resolution']} ({best_variant['bandwidth']} bps)")
+                logging.debug("Selected best quality")
                 return best_variant['url']
 
         return playlist_url  # Fallback to original if processing fails
     except Exception as e:
-        logging.warning(f"Error processing M3U8 playlist {playlist_url}: {e}")
+        logging.debug(f"Error processing M3U8 playlist {playlist_url}: {e}")
         return playlist_url
 
 
@@ -532,20 +534,20 @@ def check_redirect_chain(url, max_depth=3):
                         'to': response.url,
                         'status': response.status_code
                     })
-                    logging.info(f"Redirect {depth+1}: {current_url} -> {response.url}")
+                    logging.debug("Redirect %s", depth + 1)
                     current_url = response.url
                 else:
                     # No more redirects, we found the final URL
                     if redirect_chain:
-                        logging.info(f"Final URL after {len(redirect_chain)} redirects: {current_url}")
+                        logging.debug("Final URL after %s redirects", len(redirect_chain))
                     return current_url
             else:
-                logging.warning(f"Redirect chain broken at depth {depth}: {current_url} (status: {response.status_code})")
+                logging.debug(f"Redirect chain broken at depth {depth}: {current_url} (status: {response.status_code})")
                 return url  # Return last known good URL
 
-        logging.warning(f"Redirect chain too deep, returning: {current_url}")
+        logging.debug(f"Redirect chain too deep, returning: {current_url}")
         return current_url
 
     except Exception as e:
-        logging.warning(f"Error checking redirect chain for {url}: {e}")
+        logging.debug(f"Error checking redirect chain for {url}: {e}")
         return url

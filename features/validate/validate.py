@@ -20,20 +20,20 @@ async def check_link_exists(session, url, retries=3, delay=5):
                 if response.status in {200, 302}:
                     return True
                 if response.status in retryable_statuses:
-                    logging.warning(f"Retryable error {response.status} for {url}, attempt {attempt}")
+                    logging.debug("Retryable error %s for %s, attempt %s", response.status, url, attempt)
                     if attempt < retries:
                         await asyncio.sleep(delay * attempt)  # Exponential backoff
                     continue
                 else:
-                    logging.warning(f"Invalid link {url} (status: {response.status})")
+                    logging.debug("Invalid link %s (status: %s)", url, response.status)
                     return False
         except aiohttp.ClientError as e:
-            logging.error(f"Network error attempt {attempt} for {url}: {e}")
+            logging.debug("Network error attempt %s for %s: %s", attempt, url, e)
             if attempt < retries:
                 await asyncio.sleep(delay * attempt)
             continue
         except Exception as e:
-            logging.error(f"Unexpected error attempt {attempt} for {url}: {e}")
+            logging.debug("Unexpected error attempt %s for %s: %s", attempt, url, e)
             if attempt < retries:
                 await asyncio.sleep(delay * attempt)
             continue
@@ -69,16 +69,16 @@ async def check_platform_live_status(session, url):
                             data = await response.json()
                             # Check if it's a live stream
                             if 'title' in data and ('live' in data['title'].lower() or 'stream' in data['title'].lower()):
-                                logging.info(f"YouTube channel {video_id} appears to be live")
+                                logging.debug("YouTube channel %s appears to be live", video_id)
                                 return True
                             else:
-                                logging.info(f"YouTube channel {video_id} exists but may not be live")
+                                logging.debug("YouTube channel %s exists but may not be live", video_id)
                                 return True  # Still count as valid even if not currently live
                         else:
-                            logging.warning(f"YouTube API check failed for {video_id}: {response.status}")
+                            logging.debug("YouTube API check failed for %s: %s", video_id, response.status)
                             return False
                 except Exception as e:
-                    logging.warning(f"YouTube live check error for {video_id}: {e}")
+                    logging.debug("YouTube live check error for %s: %s", video_id, e)
                     return False
 
         # Twitch live status check
@@ -94,30 +94,30 @@ async def check_platform_live_status(session, url):
                             # Parse HTML to check for live status
                             content = await response.text()
                             if 'isLive' in content or 'data-is-live="true"' in content:
-                                logging.info(f"Twitch channel {channel_name} is live")
+                                logging.debug("Twitch channel %s is live", channel_name)
                                 return True
                             else:
-                                logging.info(f"Twitch channel {channel_name} exists but may not be live")
+                                logging.debug("Twitch channel %s exists but may not be live", channel_name)
                                 return True  # Still count as valid
                         else:
-                            logging.warning(f"Twitch check failed for {channel_name}: {response.status}")
+                            logging.debug("Twitch check failed for %s: %s", channel_name, response.status)
                             return False
                 except Exception as e:
-                    logging.warning(f"Twitch live check error for {channel_name}: {e}")
+                    logging.debug("Twitch live check error for %s: %s", channel_name, e)
                     return False
 
         # For other platforms, just check if URL exists
         return await check_link_exists(session, url)
 
     except Exception as e:
-        logging.error(f"Platform live check error for {url}: {e}")
+        logging.debug("Platform live check error for %s: %s", url, e)
         return False
 
 
 async def validate_m3u8_stream(session, url):
     """Comprehensive M3U8 stream validation using professional packages."""
     try:
-        logging.info(f"Validating M3U8 stream: {url}")
+        logging.debug("Validating M3U8 stream: %s", url)
 
         # First, check if the URL is accessible
         if not await check_link_exists(session, url):
@@ -138,10 +138,10 @@ async def validate_m3u8_stream(session, url):
                     qualities = list(streams.keys())
                     best_quality = streams.get('best') or streams.get('live') or list(streams.values())[0]
 
-                    logging.info(f"Streamlink found {len(streams)} streams: {qualities}")
+                    logging.debug("Streamlink found %s streams: %s", len(streams), qualities)
                     return True, f"Live stream ({len(streams)} qualities: {', '.join(qualities[:3])})"
                 else:
-                    logging.warning(f"Streamlink found no streams for {url}")
+                    logging.debug("Streamlink found no streams for %s", url)
             except Exception as e:
                 logging.debug(f"Streamlink validation failed: {e}")
 
@@ -188,11 +188,11 @@ async def validate_m3u8_stream(session, url):
 
         except ImportError:
             # Fallback to original method if packages not available
-            logging.warning("Professional M3U8 packages not available, using fallback")
+            logging.debug("Professional M3U8 packages not available, using fallback")
             return await validate_m3u8_stream_fallback(session, url)
 
     except Exception as e:
-        logging.error(f"M3U8 validation error for {url}: {e}")
+        logging.debug("M3U8 validation error for %s: %s", url, e)
         return False, f"Validation error: {str(e)}"
 
 
@@ -214,7 +214,7 @@ async def validate_m3u8_stream_fallback(session, url):
             is_media = any('#EXTINF:' in line or '#EXT-X-TARGETDURATION:' in line for line in lines)
 
             if is_master:
-                logging.info(f"Master playlist detected for {url}")
+                logging.debug("Master playlist detected for %s", url)
                 # Parse master playlist for variants
                 variants = []
                 for i, line in enumerate(lines):
@@ -261,13 +261,13 @@ async def validate_m3u8_stream_fallback(session, url):
                 # Test the best quality variant
                 variants.sort(key=lambda x: x.get('bandwidth', 0), reverse=True)
                 best_variant = variants[0]
-                logging.info(f"Testing best variant: {best_variant.get('resolution', 'unknown')} ({best_variant.get('bandwidth', 'unknown')} bps)")
+                logging.debug("Testing best variant: %s", best_variant.get("resolution", "unknown"))
 
                 # Validate the variant stream
                 return await validate_media_playlist(session, best_variant['url'])
 
             elif is_media:
-                logging.info(f"Media playlist detected for {url}")
+                logging.debug("Media playlist detected for %s", url)
                 # Direct media playlist validation
                 return await validate_media_playlist(session, url)
 
@@ -275,7 +275,7 @@ async def validate_m3u8_stream_fallback(session, url):
                 return False, "Invalid M3U8 format"
 
     except Exception as e:
-        logging.error(f"Fallback M3U8 validation error for {url}: {e}")
+        logging.debug("Fallback M3U8 validation error for %s: %s", url, e)
         return False, f"Fallback validation error: {str(e)}"
 
 
@@ -314,14 +314,14 @@ async def validate_media_playlist(session, playlist_url):
             # For live streams, we expect ongoing segments without ENDLIST
             # For VOD, we expect ENDLIST
             if has_end_list:
-                logging.info(f"VOD playlist detected: {segment_count} segments")
+                logging.debug("VOD playlist detected: %s segments", segment_count)
                 return True, f"VOD stream ({segment_count} segments)"
             else:
-                logging.info(f"Live stream detected: {segment_count} segments")
+                logging.debug("Live stream detected: %s segments", segment_count)
                 return True, f"Live stream ({segment_count} segments)"
 
     except Exception as e:
-        logging.error(f"Media playlist validation error for {playlist_url}: {e}")
+        logging.debug("Media playlist validation error for %s: %s", playlist_url, e)
         return False, f"Media validation error: {str(e)}"
 
 
@@ -390,7 +390,7 @@ async def get_stream_metadata(session, url):
 async def validate_channel(session, channel):
     """Asynchronously validate a single channel."""
     try:
-        logging.info(f"Validating channel: {channel['url']}")
+        logging.debug("Validating channel: %s", channel.get("url"))
 
         # Use platform-specific live checking for YouTube/Twitch
         if 'youtube.com' in channel['url'] or 'youtu.be' in channel['url'] or 'twitch.tv' in channel['url']:
@@ -426,7 +426,7 @@ async def validate_channel(session, channel):
                 return channel, False
 
     except Exception as e:
-        logging.error(f"Error validating channel {channel['url']}: {e}")
+        logging.debug("Error validating channel %s: %s", channel.get("url"), e)
         channel['status'] = 'error'
         channel['playing_now'] = f"Validation error: {str(e)}"
         return channel, False
@@ -452,7 +452,7 @@ async def process_channels(channels, invalid_links, delay=5):
 
             for result in results:
                 if isinstance(result, Exception):
-                    logging.error(f"Batch processing error: {result}")
+                    logging.debug("Batch processing error: %s", result)
                     continue
 
                 channel, is_valid = result
@@ -468,7 +468,13 @@ async def process_channels(channels, invalid_links, delay=5):
                 save_json_atomic(FILES['streams'], valid_channels)
                 save_json_atomic(FILES['dead'], dead_channels)
 
-                logging.info(f"Batch {i//BATCH_SIZE + 1}: {len(valid_channels)} valid, {len(dead_channels)} dead")
+                logging.info(
+                    "[found] %s\n[reworking] batch %s\n[how many found] %s\n[how many not found] %s",
+                    len(valid_channels),
+                    i // BATCH_SIZE + 1,
+                    len(valid_channels),
+                    len(dead_channels),
+                )
 
             except Exception as e:
                 logging.error(f"Error saving batch: {e}")

@@ -41,4 +41,9 @@ def create_app():
     """Return the configured Flask app, ensuring routes are registered."""
     # Side-effect import: registers every @app.route on the singleton above.
     import routes  # noqa: F401
+    from features.public_api import register_public_api
+    from features.public_base import register_public_base_hooks
+
+    register_public_base_hooks(app)
+    register_public_api(app)
     return app

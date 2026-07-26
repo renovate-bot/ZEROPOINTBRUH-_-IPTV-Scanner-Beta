@@ -15,3 +15,7 @@ last_update_count = 0
 
 image_cache = {}
 last_cache_clear = 0
+
+# Learned from the Host / X-Forwarded-* of real browser/API requests so absolute
+# URLs (API, SEO, M3U) match whatever domain.tld or ip:port users call from.
+LEARNED_PUBLIC_BASE = ""

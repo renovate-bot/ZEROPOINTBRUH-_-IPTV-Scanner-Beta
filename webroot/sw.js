@@ -1,7 +1,8 @@
 // IPTV Scanner service worker — caches the app shell ONLY.
 // Streams (/proxy/stream), /channels, /status, /api/*, and /icons/* are always network.
+// JS/CSS use network-first so UI fixes apply without fighting a stale cache.
 
-const SHELL_CACHE = 'iptv-shell-v3';
+const SHELL_CACHE = 'iptv-shell-v7';
 const SHELL_URLS = [
     '/',
     '/js/scripts.js',
@@ -51,7 +52,6 @@ function isShellRequest(url) {
 }
 
 function isBypass(url) {
-    // Never cache: live streams, channel API, status, icons, images.
     if (url.pathname.startsWith('/proxy/')) return true;
     if (url.pathname === '/channels') return true;
     if (url.pathname === '/status') return true;
@@ -59,6 +59,11 @@ function isBypass(url) {
     if (url.pathname.startsWith('/icons/')) return true;
     if (url.pathname === '/sw.js') return true;
     return false;
+}
+
+function isVolatileShell(url) {
+    // Always try network first for scripts/styles so deploys show up.
+    return url.pathname === '/js/scripts.js' || url.pathname.startsWith('/css/');
 }
 
 self.addEventListener('fetch', (event) => {
@@ -73,6 +78,24 @@ self.addEventListener('fetch', (event) => {
     }
     if (url.origin !== self.location.origin) return;
     if (isBypass(url)) return;
+
+    if (isShellRequest(url) && isVolatileShell(url)) {
+        event.respondWith(
+            fetch(req)
+                .then((res) => {
+                    if (res && res.ok) {
+                        const clone = res.clone();
+                        caches
+                            .open(SHELL_CACHE)
+                            .then((c) => c.put(req, clone))
+                            .catch(() => {});
+                    }
+                    return res;
+                })
+                .catch(() => caches.match(req))
+        );
+        return;
+    }
 
     if (isShellRequest(url)) {
         event.respondWith(
@@ -95,7 +118,6 @@ self.addEventListener('fetch', (event) => {
         return;
     }
 
-    // Google Fonts CSS + font files — cache-first with fallback.
     if (
         url.hostname === 'fonts.googleapis.com' ||
         url.hostname === 'fonts.gstatic.com' ||

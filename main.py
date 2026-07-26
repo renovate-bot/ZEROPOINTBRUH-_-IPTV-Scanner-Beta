@@ -25,6 +25,47 @@ logging.basicConfig(
 )
 log = logging.getLogger("main")
 
+
+class _QuietAccessFilter(logging.Filter):
+    """Drop high-frequency HTTP access lines (HLS segments, status polls, etc.)."""
+
+    _SKIP_SUBSTR = (
+        "/proxy/stream",
+        "/proxy/image",
+        "/status",
+        "/api/events",
+        "/sw.js",
+        "/manifest.webmanifest",
+        "/icons/",
+        "/css/",
+        "/js/",
+        "favicon",
+    )
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        return not any(s in msg for s in self._SKIP_SUBSTR)
+
+
+def _configure_quiet_logging() -> None:
+    """Keep occasional worker reports; silence grab/proxy spam."""
+    logging.getLogger("werkzeug").addFilter(_QuietAccessFilter())
+    # Third-party chatter during stream checks / shutdown
+    for name in (
+        "urllib3",
+        "charset_normalizer",
+        "streamlink",
+        "streamlink.session",
+        "streamlink.stream",
+        "streamlink.stream.ffmpegmux",
+        "streamlink.stream.hls",
+        "streamlink.stream.http",
+    ):
+        logging.getLogger(name).setLevel(logging.ERROR)
+
+
+_configure_quiet_logging()
+
 # Dedicated pool for asyncio.to_thread / run_in_executor so we can shut it
 # down with wait=False on Ctrl+C (avoids the hanging atexit ThreadPool join).
 _EXECUTOR = concurrent.futures.ThreadPoolExecutor(
@@ -67,7 +108,7 @@ async def _async_main():
 
 
 def _shutdown(loop: asyncio.AbstractEventLoop, client) -> None:
-    log.info("Shutting own :3 XD, bye bye") # just a joke, don't take it seriously :3 XD
+    log.info("Shutting down :3 XD, bye bye")  # just a joke, don't take it seriously :3 XD
     if client is not None:
         try:
             loop.run_until_complete(asyncio.wait_for(client.stop(), timeout=2.5))

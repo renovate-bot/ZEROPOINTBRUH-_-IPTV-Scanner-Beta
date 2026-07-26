@@ -35,6 +35,8 @@ import time
 import uuid
 from typing import Any, Awaitable, Callable, Iterable, Optional
 
+from config import SELF_HOST_REPO
+
 
 IPTV_FW_EMBED = os.environ.get("IPTV_FW_EMBED", "1").strip().lower() in (
     "1", "true", "yes", "on",
@@ -282,46 +284,91 @@ else:
 _BOX_MIN_WIDTH = 44
 
 
+def _pad_report_rows(rows: list[tuple[str, str]], *, label_width: int = 24) -> list[str]:
+    """Align ``label …… value`` columns for occasional console reports."""
+    out: list[str] = []
+    width = max(label_width, max((len(label) for label, _ in rows), default=label_width))
+    for label, value in rows:
+        dots = "." * max(2, width - len(label) + 1)
+        out.append(f"  {label} {dots} {value}")
+    return out
+
+
 def log_worker_batch(
     worker_name: str,
     lines: Iterable[str],
     limit: int = 5,
 ) -> None:
-    """Emit a boxed batch summary to the shared logger.
+    """Emit a compact, framed batch report (no per-channel spam)."""
+    materialised = [str(line) for line in lines if str(line).strip()]
+    if not materialised:
+        materialised = ["(no updates)"]
 
-    Format::
+    # Tagged report lines already formatted — wrap in a frame.
+    if any(s.lstrip().startswith("[") for s in materialised) or any(
+        " .." in s or " …" in s for s in materialised
+    ):
+        body = materialised
+    else:
+        # Legacy: collapse old per-channel lines into counts.
+        found = sum(1 for s in materialised if s.lstrip().startswith(("✓", "↑", "+")))
+        not_found = sum(1 for s in materialised if s.lstrip().startswith(("✗", "·", "-")))
+        if found == 0 and not_found == 0:
+            found = len(materialised)
+        body = _pad_report_rows(
+            [
+                ("found", str(found)),
+                ("reworking", str(len(materialised))),
+                ("how many found", str(found)),
+                ("how many not found", str(not_found)),
+            ]
+        )
 
-        ──────── [active-health] batch ────────
-          ✓ Channel Name status
-          ✗ Broken Channel http_404
-        ──────────────────────────────────────
+    title = f" {worker_name} "
+    width = max(_BOX_MIN_WIDTH, len(title) + 8, *(len(s) + 2 for s in body))
+    top = "┌" + "─" * (width - 2) + "┐"
+    mid = "├" + "─" * (width - 2) + "┤"
+    bot = "└" + "─" * (width - 2) + "┘"
+    title_line = "│" + title.center(width - 2) + "│"
+    framed = [top, title_line, mid]
+    for s in body:
+        pad = " " * max(0, width - 2 - len(s))
+        framed.append(f"│{s}{pad}│")
+    framed.append(bot)
+    logging.getLogger("task_queue.batch").info("\n%s", "\n".join(framed))
 
-    Only the first ``limit`` lines are shown verbatim; the remainder is
-    collapsed into a single ``… (+N more)`` line so long batches do not
-    flood the console.
-    """
-    materialised = [str(line) for line in lines]
-    shown = materialised[: max(0, limit)]
-    remaining = max(0, len(materialised) - len(shown))
-    if remaining:
-        shown.append(f"… (+{remaining} more)")
 
-    header_label = f" [{worker_name}] batch "
-    content_width = max(
-        _BOX_MIN_WIDTH,
-        len(header_label) + 16,
-        *(len(s) + 4 for s in shown),
-    )
-    dashes = "─" * max(4, (content_width - len(header_label)) // 2)
-    top = f"{dashes}{header_label}{dashes}"
-    bottom = "─" * len(top)
+def log_check_report(
+    worker_name: str,
+    *,
+    found: int,
+    not_found: int,
+    reworking: int,
+    how_many_found: Optional[int] = None,
+    how_many_not_found: Optional[int] = None,
+    priority_checks: Optional[int] = None,
+    how_many_left: Optional[int] = None,
+    elapsed_sec: Optional[float] = None,
+    quiet_if_empty: bool = False,
+) -> None:
+    """Occasional channel-check summary for the console."""
+    if quiet_if_empty and int(found) == 0 and int(not_found) == 0 and int(reworking) == 0:
+        return
+    # Skip no-op icon-style chatter (worked 10, found 0) unless something landed.
+    if quiet_if_empty and int(found) == 0 and int(reworking) > 0:
+        return
 
-    out = [top]
-    for s in shown:
-        out.append(f"  {s}")
-    out.append(bottom)
-
-    logging.getLogger("task_queue.batch").info("\n%s", "\n".join(out))
+    rows = [
+        ("found", str(int(found))),
+        ("reworking", str(int(reworking))),
+        ("how many found", str(int(how_many_found if how_many_found is not None else found))),
+        ("how many not found", str(int(how_many_not_found if how_many_not_found is not None else not_found))),
+        ("Priority checks scans", str(int(priority_checks or 0))),
+        ("how many left", str(int(how_many_left if how_many_left is not None else 0))),
+    ]
+    if elapsed_sec is not None:
+        rows.append(("elapsed", f"{float(elapsed_sec):.1f}s"))
+    log_worker_batch(worker_name, _pad_report_rows(rows))
 
 
 def get_lan_ip() -> str:
@@ -362,7 +409,16 @@ def print_access_banner(
     host_display = bind_host if bind_host not in ("", "0.0.0.0", "::", "*") else "127.0.0.1"
     local_url = f"http://{host_display}:{port}"
     network_url = f"http://{lan_ip}:{port}"
-    public_url = (public_base or "").strip().rstrip("/") or "(not configured)"
+    public_url = (public_base or "").strip().rstrip("/")
+    if not public_url:
+        try:
+            import state as _state
+
+            public_url = (_state.LEARNED_PUBLIC_BASE or "").strip().rstrip("/")
+        except Exception:
+            public_url = ""
+    if not public_url:
+        public_url = "(auto from first visitor host)"
 
     if _HAS_REAL_FW:
         queue_note = "FastWorker task queue (GUI available)"
@@ -377,6 +433,7 @@ def print_access_banner(
         f"  Public  → {public_url}",
         "",
         f"  Tasks   → {queue_note}",
+        f"  Self-host → {SELF_HOST_REPO}",
     ]
 
     width = max(len(s) for s in lines) + 4

@@ -254,7 +254,7 @@ async def run_active_health_batch(
     limit = limit or ACTIVE_HEALTH_BATCH_SIZE
     batch = store.claim_active_batch(limit)
     if not batch:
-        log.info("active-health: nothing to check")
+        log.debug("active-health: nothing to check")
         return {"claimed": 0}
 
     started = time.perf_counter()
@@ -264,17 +264,32 @@ async def run_active_health_batch(
     summary["claimed"] = len(batch)
     summary["elapsed_sec"] = round(time.perf_counter() - started, 2)
 
-    task_queue.log_worker_batch(
+    found = int(summary.get("still_online", 0) or 0)
+    not_found = int(summary.get("demoted", 0) or 0)
+    try:
+        catalog_found = store.count_channels(status="online", exclude_test=True)
+        catalog_not_found = max(
+            0,
+            store.count_channels(exclude_test=True) - catalog_found,
+        )
+        priority_checks = store.count_priority_checks(ACTIVE_STATUSES)
+        how_many_left = store.count_check_queue(ACTIVE_STATUSES)
+    except Exception:  # noqa: BLE001
+        catalog_found = found
+        catalog_not_found = not_found
+        priority_checks = 0
+        how_many_left = 0
+
+    task_queue.log_check_report(
         "active-health",
-        _format_batch_lines(results),
-        limit=5,
-    )
-    log.info(
-        "active-health: claimed=%d online=%d demoted=%d in %.2fs",
-        summary["claimed"],
-        summary.get("still_online", 0) + summary.get("promoted", 0),
-        summary.get("demoted", 0),
-        summary["elapsed_sec"],
+        found=found,
+        not_found=not_found,
+        reworking=len(batch),
+        how_many_found=catalog_found,
+        how_many_not_found=catalog_not_found,
+        priority_checks=priority_checks,
+        how_many_left=how_many_left,
+        elapsed_sec=summary["elapsed_sec"],
     )
     return summary
 
@@ -314,7 +329,7 @@ async def run_dead_revival_batch(
     limit = limit or DEAD_REVIVAL_BATCH_SIZE
     batch = store.claim_dead_batch(limit)
     if not batch:
-        log.info("dead-revival: nothing to retry")
+        log.debug("dead-revival: nothing to retry")
         return {"claimed": 0}
 
     started = time.perf_counter()
@@ -328,17 +343,32 @@ async def run_dead_revival_batch(
     summary["claimed"] = len(batch)
     summary["elapsed_sec"] = round(time.perf_counter() - started, 2)
 
-    task_queue.log_worker_batch(
+    found = int(summary.get("promoted", 0) or 0)
+    not_found = int(summary.get("still_dead", 0) or 0)
+    try:
+        catalog_found = store.count_channels(status="online", exclude_test=True)
+        catalog_not_found = max(
+            0,
+            store.count_channels(exclude_test=True) - catalog_found,
+        )
+        priority_checks = store.count_priority_checks(DEAD_STATUSES)
+        how_many_left = store.count_check_queue(DEAD_STATUSES)
+    except Exception:  # noqa: BLE001
+        catalog_found = found
+        catalog_not_found = not_found
+        priority_checks = 0
+        how_many_left = 0
+
+    task_queue.log_check_report(
         "dead-revival",
-        _format_batch_lines(results, mark_alive="↑", mark_dead="·"),
-        limit=5,
-    )
-    log.info(
-        "dead-revival: claimed=%d revived=%d still_dead=%d in %.2fs",
-        summary["claimed"],
-        summary.get("promoted", 0),
-        summary.get("still_dead", 0),
-        summary["elapsed_sec"],
+        found=found,
+        not_found=not_found,
+        reworking=len(batch),
+        how_many_found=catalog_found,
+        how_many_not_found=catalog_not_found,
+        priority_checks=priority_checks,
+        how_many_left=how_many_left,
+        elapsed_sec=summary["elapsed_sec"],
     )
     return summary
 
@@ -583,12 +613,11 @@ async def run_icon_prefetch_batch(
         page += 1
 
     if not needing:
-        log.info("icon-prefetch: nothing to fetch")
+        log.debug("icon-prefetch: nothing to fetch")
         return {"fetched": 0, "skipped": 0}
 
     loop = asyncio.get_running_loop()
     fetched = 0
-    lines: list[str] = []
     for ch in needing:
         try:
             icon_url = await loop.run_in_executor(
@@ -602,17 +631,24 @@ async def run_icon_prefetch_batch(
             )
         except Exception as exc:  # noqa: BLE001
             log.debug("icon-prefetch: %s failed: %s", ch.get("name"), exc)
-            lines.append(f"✗ {_short(ch.get('name'), 42)}  [error]")
             continue
         if icon_url:
             fetched += 1
-            lines.append(f"✓ {_short(ch.get('name'), 42)}  {icon_url}")
-        else:
-            lines.append(f"· {_short(ch.get('name'), 42)}  [not found]")
         await asyncio.sleep(0.2)
 
-    task_queue.log_worker_batch("icon-prefetch", lines, limit=5)
-    return {"fetched": fetched, "skipped": len(needing) - fetched}
+    skipped = len(needing) - fetched
+    task_queue.log_check_report(
+        "icon-prefetch",
+        found=fetched,
+        not_found=skipped,
+        reworking=len(needing),
+        how_many_found=fetched,
+        how_many_not_found=skipped,
+        priority_checks=0,
+        how_many_left=0,
+        quiet_if_empty=True,
+    )
+    return {"fetched": fetched, "skipped": skipped}
 
 
 async def icon_prefetch_loop(

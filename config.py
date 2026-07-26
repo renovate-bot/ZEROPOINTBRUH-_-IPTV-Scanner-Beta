@@ -68,3 +68,29 @@ STREAM_HEADERS = {
     "Connection": "keep-alive",
 }
 
+# Public streams API (VRChat / Unity / etc.) — no key, paginated, lightly rate-limited.
+API_PUBLIC_PAGE_SIZE = 50
+try:
+    API_PUBLIC_MIN_INTERVAL_SEC = float(os.environ.get("IPTV_API_MIN_INTERVAL_SEC", "2"))
+except (TypeError, ValueError):
+    API_PUBLIC_MIN_INTERVAL_SEC = 2.0
+try:
+    API_PUBLIC_BURST = int(os.environ.get("IPTV_API_BURST", "3"))
+except (TypeError, ValueError):
+    API_PUBLIC_BURST = 3
+
+# Kind support reminder (shown in public JSON + /api docs). Optional override via env.
+SUPPORT_MESSAGE = (
+    os.environ.get("IPTV_SUPPORT_MESSAGE")
+    or "Please be kind and consider supporting this project :3"
+).strip()
+SUPPORT_KOFI = os.environ.get("IPTV_SUPPORT_KOFI", "https://ko-fi.com/zeropointbruh").strip()
+SUPPORT_PAYPAL = os.environ.get("IPTV_SUPPORT_PAYPAL", "wegj1@hotmail.com").strip()
+SUPPORT_CASHAPP = os.environ.get("IPTV_SUPPORT_CASHAPP", "$wegj1").strip()
+
+# Self-host / upstream project (shown in /api docs + banners).
+SELF_HOST_REPO = os.environ.get(
+    "IPTV_SELF_HOST_REPO",
+    "https://github.com/ZEROPOINTBRUH/IPTV-Scanner",
+).strip().rstrip("/")
+
