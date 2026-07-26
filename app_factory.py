@@ -11,9 +11,13 @@ or, when routes have already been registered elsewhere::
     from app_factory import app
 """
 
+import os
+
 from flask import Flask
 from flask_cors import CORS
 
+_ROOT = os.path.abspath(os.path.dirname(__file__))
+_WEBROOT = os.path.join(_ROOT, "webroot")
 
 # Module-level singleton so @app.route decorators in routes.py have something
 # to attach to at import time (mirroring the original monolithic main.py).
@@ -26,9 +30,9 @@ from flask_cors import CORS
 # `/manifest.webmanifest`, `/icons/<filename>`).
 app = Flask(
     __name__,
-    template_folder='webroot',
-    static_folder='webroot',
-    static_url_path='',
+    template_folder=_WEBROOT,
+    static_folder=_WEBROOT,
+    static_url_path="",
 )
 CORS(app)
 

@@ -13,9 +13,8 @@ from threading import Thread
 
 from app_factory import create_app
 from config import DIRECTORIES, IPTV_BIND_HOST, IPTV_PORT, IPTV_PUBLIC_BASE_URL
-from db import ensure_db
-import fw_tasks
-from task_queue import print_access_banner
+from features.storage.db import ensure_db
+from features.workers import fw_tasks
 
 
 logging.basicConfig(
@@ -67,7 +66,6 @@ if __name__ == "__main__":
     flask_thread.start()
 
     client = loop.run_until_complete(_async_main())
-    print_access_banner(IPTV_BIND_HOST, IPTV_PORT, public_base=IPTV_PUBLIC_BASE_URL or None)
 
     try:
         loop.run_forever()

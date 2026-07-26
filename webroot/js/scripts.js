@@ -601,15 +601,29 @@
             const countries = Array.isArray(data.countries) ? data.countries : [];
             const g = $('groupFilter');
             const c = $('countryFilter');
+            const toLabel = (v) => {
+                if (v == null) return '';
+                if (typeof v === 'string' || typeof v === 'number') return String(v);
+                if (typeof v === 'object') return String(v.name || v.code || v.label || '');
+                return String(v);
+            };
             const fill = (sel, values, placeholder, current) => {
                 if (!sel) return;
-                const known = new Set(values.map(String));
+                const labels = values.map(toLabel).filter(Boolean);
+                // Pin Test at bottom if present
+                const testIdx = labels.findIndex((x) => x === 'Test');
+                if (testIdx >= 0) {
+                    labels.splice(testIdx, 1);
+                    labels.sort((a, b) => a.localeCompare(b));
+                    labels.push('Test');
+                } else {
+                    labels.sort((a, b) => a.localeCompare(b));
+                }
+                const known = new Set(labels);
                 const preserve = current && known.has(current) ? current : '';
                 sel.innerHTML =
                     `<option value="">${placeholder}</option>` +
-                    values
-                        .slice()
-                        .sort((a, b) => String(a).localeCompare(String(b)))
+                    labels
                         .map(
                             (v) =>
                                 `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`

@@ -33,7 +33,7 @@ from flask import (
 
 import state
 from app_factory import app
-from channels_io import get_valid_channels, load_json_file
+from features.storage.channels_io import get_valid_channels, load_json_file
 from config import (
     FILES,
     HEADERS,
@@ -41,9 +41,9 @@ from config import (
     IPTV_SITE_NAME,
     SWEEP_INTERVAL_SEC,
 )
-from icons import download_channel_icon
-from ingest import channel_icon_safe_name, find_local_icon_url, infer_country
-from seo import (
+from features.icons.icons import download_channel_icon
+from features.ingest.ingest import channel_icon_safe_name, find_local_icon_url, infer_country
+from features.seo.seo import (
     SEO_RESERVED_SLUGS,
     SEO_SLUG_RE,
     build_proxied_live_m3u,
@@ -55,7 +55,7 @@ from seo import (
     seo_refresh_slug_index,
     seo_slug_snapshot,
 )
-from workers import initial_scan, sweep_channels_async
+from features.workers.workers import initial_scan, sweep_channels_async
 
 
 # --- SEO endpoints ------------------------------------------------------------
@@ -63,17 +63,55 @@ from workers import initial_scan, sweep_channels_async
 @app.route("/robots.txt")
 def seo_robots_txt():
     base = seo_public_base_url()
-    body = f"User-agent: *\nAllow: /\n\nSitemap: {base}/sitemap.xml\n"
+    body = (
+        "User-agent: *\n"
+        "Allow: /\n"
+        "Disallow: /proxy/\n"
+        "Disallow: /api/\n"
+        "Disallow: /export/\n"
+        "Disallow: /admin/\n"
+        f"\nSitemap: {base}/sitemap.xml\n"
+    )
     return Response(body, mimetype="text/plain; charset=utf-8")
 
 
 @app.route("/sitemap.xml")
 def seo_sitemap_xml():
-    seo_refresh_slug_index()
-    _, slugs_sorted = seo_slug_snapshot()
+    """Sitemap index pointing at live + videos sitemaps."""
     base = seo_public_base_url()
-    urls = [base + "/"]
+    now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+    body = "\n".join([
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
+        "<sitemap>",
+        f"  <loc>{xml_escape(base + '/sitemap-live.xml')}</loc>",
+        f"  <lastmod>{now}</lastmod>",
+        "</sitemap>",
+        "<sitemap>",
+        f"  <loc>{xml_escape(base + '/sitemap-videos.xml')}</loc>",
+        f"  <lastmod>{now}</lastmod>",
+        "</sitemap>",
+        "</sitemapindex>",
+    ])
+    return Response(body, mimetype="application/xml; charset=utf-8")
+
+
+def _sitemap_urlset(media_type=None):
+    seo_refresh_slug_index()
+    slug_map, slugs_sorted = seo_slug_snapshot()
+    base = seo_public_base_url()
+    urls = [base + "/"] if media_type in (None, "live") else []
     for slug in slugs_sorted:
+        ch = slug_map.get(slug) or {}
+        if (ch.get("group_title") or "") == "Test":
+            continue
+        mt = (ch.get("media_type") or "unknown").lower()
+        if media_type == "live" and mt == "vod":
+            continue
+        if media_type == "vod" and mt != "vod":
+            continue
+        if (ch.get("status") or "").lower() != "online":
+            continue
         urls.append(f"{base}/{slug}")
     lines = [
         '<?xml version="1.0" encoding="UTF-8"?>',
@@ -85,10 +123,20 @@ def seo_sitemap_xml():
         lines.append(f"  <loc>{xml_escape(loc)}</loc>")
         lines.append(f"  <lastmod>{now}</lastmod>")
         lines.append("  <changefreq>hourly</changefreq>")
-        lines.append("  <priority>0.8</priority>")
+        lines.append(f"  <priority>{'0.9' if loc.rstrip('/').endswith(base.rstrip('/')) or loc == base + '/' else '0.7'}</priority>")
         lines.append("</url>")
     lines.append("</urlset>")
     return Response("\n".join(lines), mimetype="application/xml; charset=utf-8")
+
+
+@app.route("/sitemap-live.xml")
+def seo_sitemap_live():
+    return _sitemap_urlset("live")
+
+
+@app.route("/sitemap-videos.xml")
+def seo_sitemap_videos():
+    return _sitemap_urlset("vod")
 
 
 @app.route("/feed.xml")
@@ -201,7 +249,7 @@ def pwa_service_worker():
 def api_variants():
     """Return HLS variant streams recorded for a given channel URL."""
     try:
-        from db import get_default_store
+        from features.storage.db import get_default_store
         url = (request.args.get('url') or '').strip()
         if not url:
             return jsonify({'variants': []})
@@ -225,7 +273,7 @@ def api_variants():
 def get_status():
     """Return current scanning status and channel count."""
     try:
-        from db import get_default_store
+        from features.storage.db import get_default_store
         store = get_default_store()
         total = store.count_channels(status="online", exclude_test=True)
         online_ct = total
@@ -253,7 +301,7 @@ def sse_channel_events():
         last_rev = -1
         while True:
             try:
-                from db import get_default_store
+                from features.storage.db import get_default_store
                 store = get_default_store()
                 rev = store.get_revision()
                 if rev != last_rev:
@@ -373,8 +421,8 @@ def trigger_scan():
     try:
         def _kick():
             async def _run():
-                import fw_tasks
-                from task_queue import Client
+                from features.workers import fw_tasks
+                from features.workers.task_queue import Client
                 c = Client(worker_count=2, name="scan-kick")
                 await c.start()
                 await c.delay("ingest_sources")
@@ -394,7 +442,7 @@ def trigger_sweep_now():
     try:
         def _kick():
             async def _run():
-                from task_queue import Client
+                from features.workers.task_queue import Client
                 c = Client(worker_count=2, name="sweep-kick")
                 await c.start()
                 await c.delay("active_health_batch")
@@ -414,7 +462,7 @@ def trigger_sweep_now():
 def get_channels():
     """Paginated channel list from SQLite (default page size 50)."""
     try:
-        from db import get_default_store
+        from features.storage.db import get_default_store
         store = get_default_store()
         page = max(1, int(request.args.get('page', 1) or 1))
         limit = min(100, max(1, int(request.args.get('limit', 50) or 50)))
@@ -482,7 +530,7 @@ def get_channels():
 def export_streams_file():
     """Full JSON array of online channels for external apps."""
     try:
-        from db import get_default_store
+        from features.storage.db import get_default_store
         channels = get_default_store().get_export_channels()
         return Response(
             json.dumps(channels, indent=2, ensure_ascii=False),
@@ -907,7 +955,7 @@ def admin_backup():
     if IPTV_PLAYLIST_SECRET and request.args.get("token") != IPTV_PLAYLIST_SECRET:
         abort(403)
     try:
-        from db import get_default_store
+        from features.storage.db import get_default_store
         path = get_default_store().backup()
         return send_file(path, as_attachment=True, download_name=os.path.basename(path))
     except Exception as e:
