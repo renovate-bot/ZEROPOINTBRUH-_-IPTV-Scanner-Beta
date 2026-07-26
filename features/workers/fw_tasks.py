@@ -31,10 +31,10 @@ import asyncio
 import logging
 from typing import Optional
 
-import health_workers
-import task_queue
-from db import get_default_store
-from task_queue import Client, TaskPriority, task
+from . import health_workers
+from . import task_queue
+from features.storage.db import get_default_store
+from .task_queue import Client, TaskPriority, task
 
 
 log = logging.getLogger("fw_tasks")

@@ -11,7 +11,7 @@ import requests
 import yt_dlp
 
 from config import HEADERS
-from ingest import channel_icon_safe_name, find_local_icon_url, guess_image_ext
+from features.ingest.ingest import channel_icon_safe_name, find_local_icon_url, guess_image_ext
 
 
 def download_channel_icon(channel_name, channel_url, tvg_logo):
@@ -31,7 +31,7 @@ def download_channel_icon(channel_name, channel_url, tvg_logo):
             path = f'{base}{ext}'
             with open(path, 'wb') as f:
                 f.write(content)
-            logging.info(f"Cached icon for {channel_name} as {safe_name}{ext}")
+            logging.debug(f"Cached icon for {channel_name} as {safe_name}{ext}")
             return f'/icons/{safe_name}{ext}'
 
         # Source 1: tvg_logo from playlist
@@ -43,7 +43,7 @@ def download_channel_icon(channel_name, channel_url, tvg_logo):
                     if url_found:
                         return url_found
             except Exception as e:
-                logging.warning(f"Failed to download tvg_logo for {channel_name}: {e}")
+                logging.debug(f"Failed to download tvg_logo for {channel_name}: {e}")
 
         # Source 2: YouTube thumbnails via yt-dlp
         if 'youtube.com' in channel_url or 'youtu.be' in channel_url:
@@ -56,7 +56,7 @@ def download_channel_icon(channel_name, channel_url, tvg_logo):
                         if url_found:
                             return url_found
                 except Exception as e:
-                    logging.warning(f"Failed to download YouTube icon for {channel_name}: {e}")
+                    logging.debug(f"Failed to download YouTube icon for {channel_name}: {e}")
 
         icon_sources = [
             f"https://raw.githubusercontent.com/tv-logo/tv-logos/main/data/logos/{safe_name}.png",
@@ -86,7 +86,7 @@ def download_channel_icon(channel_name, channel_url, tvg_logo):
                     if url_found:
                         return url_found
             except Exception as e:
-                logging.warning(f"Failed to download favicon for {channel_name}: {e}")
+                logging.debug(f"Failed to download favicon for {channel_name}: {e}")
 
         try:
             parsed_url = urlparse(channel_url or '')
@@ -105,12 +105,12 @@ def download_channel_icon(channel_name, channel_url, tvg_logo):
                     if url_found:
                         return url_found
         except Exception as e:
-            logging.warning(f"Fallback favicons failed for {channel_name}: {e}")
+            logging.debug(f"Fallback favicons failed for {channel_name}: {e}")
 
         return None
 
     except Exception as e:
-        logging.error(f"Error downloading icon for {channel_name}: {e}")
+        logging.debug(f"Error downloading icon for {channel_name}: {e}")
         return None
 
 
@@ -128,7 +128,7 @@ def get_youtube_channel_icon(channel_url):
             if info and info.get('thumbnail'):
                 return info['thumbnail']
     except Exception as e:
-        logging.warning(f"Failed to get YouTube icon: {e}")
+        logging.debug(f"Failed to get YouTube icon: {e}")
         return None
 
 
@@ -154,7 +154,7 @@ def get_domain_favicon(channel_url):
             except Exception:
                 continue
     except Exception as e:
-        logging.warning(f"Failed to get domain favicon: {e}")
+        logging.debug(f"Failed to get domain favicon: {e}")
         return None
 
 

@@ -31,7 +31,7 @@ def save_json_atomic(path, data):
 
 def _store():
     try:
-        from db import get_default_store
+        from .db import get_default_store
 
         return get_default_store()
     except Exception:

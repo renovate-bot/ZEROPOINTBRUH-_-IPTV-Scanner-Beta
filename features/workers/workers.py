@@ -6,11 +6,11 @@ import time
 from functools import partial
 
 import state
-from channels_io import load_json_file, save_json_atomic
+from features.storage.channels_io import load_json_file, save_json_atomic
 from config import FILES, SWEEP_INTERVAL_SEC
-from icons import download_channel_icon
-from ingest import channel_icon_safe_name, check_all_global_sources, find_local_icon_url
-from validate import process_channels
+from features.icons.icons import download_channel_icon
+from features.ingest.ingest import channel_icon_safe_name, check_all_global_sources, find_local_icon_url
+from features.validate.validate import process_channels
 
 
 async def initial_scan():
